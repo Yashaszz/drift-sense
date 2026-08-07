@@ -13,10 +13,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to exact release tags, not floating majors. Not every
+      # action publishes a floating major: setup-uv released v9.0.0 without a
+      # `v9` tag, and `@v9` fails to resolve before checkout even runs.
+      - uses: actions/checkout@v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
