@@ -159,7 +159,8 @@ def test_zncc_surface_accepts_matching_weight():
     template = np.zeros((10, 10), dtype=np.float32)
     search = np.zeros((100, 100), dtype=np.float32)
     weight = np.ones((10, 10), dtype=np.float32)
-    assert matcher.zncc_surface(template, search, weight=weight).shape == (91, 91)
+    with pytest.warns(UserWarning, match="masked ZNCC is not implemented"):
+        assert matcher.zncc_surface(template, search, weight=weight).shape == (91, 91)
 
 
 @pytest.mark.parametrize("factor", [2.0, 10.0, 9.97])

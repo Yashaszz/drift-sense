@@ -16,22 +16,39 @@ Stage 5 — subpixel refinement
 
 Status
 ------
-T0 skeleton. Every function here returns a correctly typed, correctly *shaped*
-placeholder so the end-to-end pipeline runs and downstream modules can be
-written against it. No algorithm is implemented yet: arrays are zero-filled and
-scores are zero. Implementations land in tasks T2, T3, T4, T5 and T8.
+Stage 3 unmasked ZNCC is implemented (T2). Everything else is still a
+placeholder that returns a correctly typed and correctly *shaped* result, so the
+end-to-end pipeline runs and downstream modules can be written against it.
+Remaining work: T3 peak extraction, T4 template construction, T5 subpixel
+refinement, T8 masked ZNCC.
 
 Placeholder outputs are deliberately shape-correct rather than pass-through.
 Shape is the part of the contract that downstream code depends on — a
 pass-through stub would let shape bugs hide until integration.
 """
 
+import warnings
 from collections.abc import Sequence
 
+import cv2
 import numpy as np
 
 from src import config
-from src.types import BoolArray, FloatArray, Peak, Shape2D
+from src.types import AnyArray, BoolArray, FloatArray, Peak, Shape2D
+
+_MIN_TEMPLATE_STD: float = 1e-6
+"""Standard deviation below which a template is treated as carrying no signal.
+
+Absolute rather than relative, and safe for both raw 8-bit data (sigma of order
+tens) and Stage 0 normalized data (sigma of order one): only a genuinely
+constant patch falls below it.
+
+This guard is not optional. ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``
+returns **1.0 at every position** for a zero-variance template rather than NaN,
+because its normalization divides by a zero denominator. Left unguarded, a
+degenerate template reads as a perfect match everywhere — the worst possible
+failure, since it is both wrong and maximally confident.
+"""
 
 __all__ = [
     "area_average_downsample",
@@ -263,37 +280,114 @@ def zncc_surface(
     DFT-accelerated with running sums, but it cannot take a mask — which is why
     the masked variant is implemented separately.
     """
-    t_rows, t_cols = template.shape
-    rows, cols = search.shape
+    template_f = _as_working_array(template, "template")
+    search_f = _as_working_array(search, "search")
+
+    t_rows, t_cols = template_f.shape
+    rows, cols = search_f.shape
     if t_rows > rows or t_cols > cols:
-        msg = f"template {template.shape} exceeds search image {search.shape}"
+        msg = f"template {template_f.shape} exceeds search image {search_f.shape}"
         raise ValueError(msg)
-    if weight is not None and weight.shape != template.shape:
-        msg = f"weight shape {weight.shape} does not match template {template.shape}"
+    if weight is not None and weight.shape != template_f.shape:
+        msg = f"weight shape {weight.shape} does not match template {template_f.shape}"
         raise ValueError(msg)
     if weight is None:
-        return _zncc_opencv(template, search)
-    return _zncc_masked_fft(template, search, weight)
+        return _zncc_opencv(template_f, search_f)
+    return _zncc_masked_fft(template_f, search_f, _as_working_array(weight, "weight"))
 
 
-def _zncc_opencv(template: FloatArray, search: FloatArray) -> FloatArray:
-    """Unmasked ZNCC via OpenCV's ``TM_CCOEFF_NORMED``.
+def _as_working_array(array: AnyArray, name: str) -> FloatArray:
+    """Coerce an input to the contiguous ``float32`` form OpenCV requires.
 
     Parameters
     ----------
-    template
-        Template as ``(t_rows, t_cols)``.
-    search
-        Search image as ``(rows, cols)``.
+    array
+        Input array of any real dtype.
+    name
+        Parameter name, used in error messages.
 
     Returns
     -------
     FloatArray
-        Correlation surface, ``float32``.
+        Two-dimensional contiguous ``float32`` view or copy.
+
+    Raises
+    ------
+    ValueError
+        If the array is not two-dimensional, or holds non-finite values.
+
+    Notes
+    -----
+    ``cv2.matchTemplate`` accepts only ``uint8`` and ``float32``; passing
+    ``float64`` raises ``cv2.error``. Coercing here rather than demanding the
+    right dtype from callers keeps the public interface permissive, which
+    matters because the deliverable must run on whatever the harness hands it.
+
+    Non-finite values are rejected rather than silently repaired. NaN propagates
+    through the correlation and would produce a plausible-looking surface with
+    an arbitrary peak; a clear error, caught and recorded by
+    :func:`src.localize.localize`, is far easier to diagnose.
+    """
+    as_array = np.asarray(array)
+    if as_array.ndim != 2:
+        msg = f"{name} must be two-dimensional, got shape {as_array.shape}"
+        raise ValueError(msg)
+    if not np.all(np.isfinite(as_array)):
+        msg = f"{name} contains non-finite values (NaN or inf)"
+        raise ValueError(msg)
+    return np.ascontiguousarray(as_array, dtype=np.float32)
+
+
+def _zncc_opencv(template: FloatArray, search: FloatArray) -> FloatArray:
+    """Compute unmasked ZNCC via OpenCV's ``TM_CCOEFF_NORMED``.
+
+    ``TM_CCOEFF_NORMED`` *is* zero-mean normalized cross-correlation: OpenCV
+    subtracts the template mean and the per-window search mean, then divides by
+    the product of the two standard deviations. It is already DFT-accelerated
+    with running sums for the local statistics, which is the standard fast
+    normalized cross-correlation formulation.
+
+    Parameters
+    ----------
+    template
+        Template as ``(t_rows, t_cols)``, contiguous ``float32``.
+    search
+        Search image as ``(rows, cols)``, contiguous ``float32``.
+
+    Returns
+    -------
+    FloatArray
+        Correlation surface, ``float32``, values in ``[-1, 1]``.
+
+    Notes
+    -----
+    Two post-conditions are enforced rather than assumed.
+
+    A zero-variance template short-circuits to an all-zero surface. OpenCV would
+    otherwise return 1.0 everywhere, which reads as a perfect match at every
+    position. Zero is the honest answer: a constant patch contains no
+    information about where it sits.
+
+    The surface is sanitised and clipped. Windows of the search image with zero
+    variance can yield non-finite intermediates, and ordinary floating-point
+    error can push a perfect match marginally past 1.0, which would violate the
+    range this function documents.
     """
     t_rows, t_cols = template.shape
     rows, cols = search.shape
-    return np.zeros((rows - t_rows + 1, cols - t_cols + 1), dtype=np.float32)
+
+    if float(np.std(template, dtype=np.float64)) < _MIN_TEMPLATE_STD:
+        return np.zeros((rows - t_rows + 1, cols - t_cols + 1), dtype=np.float32)
+
+    # matchTemplate already yields float32, so asarray is a no-copy view; it is
+    # here to pin the static type, which OpenCV's stubs leave broader.
+    surface: FloatArray = np.asarray(
+        cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED),
+        dtype=np.float32,
+    )
+    np.nan_to_num(surface, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+    np.clip(surface, -1.0, 1.0, out=surface)
+    return surface
 
 
 def _zncc_masked_fft(
@@ -321,12 +415,28 @@ def _zncc_masked_fft(
     FloatArray
         Correlation surface, ``float32``.
 
+    Warns
+    -----
+    UserWarning
+        Always, until T8. The masked formulation is not implemented yet and this
+        falls back to unmasked correlation, which ignores the weight entirely.
+        Warning rather than raising keeps the never-raises contract intact while
+        making sure a caller cannot mistake the fallback for a working masked
+        correlation.
+
     Notes
     -----
     With an all-ones weight this must agree with :func:`_zncc_opencv` to within
-    floating-point tolerance. That equivalence is the primary correctness test.
+    floating-point tolerance. That equivalence is the primary correctness test
+    once the real implementation lands.
     """
     del weight  # placeholder: masked formulation lands in T8
+    warnings.warn(
+        "masked ZNCC is not implemented yet (T8); ignoring the weight mask and "
+        "returning unmasked correlation",
+        UserWarning,
+        stacklevel=3,
+    )
     return _zncc_opencv(template, search)
 
 
