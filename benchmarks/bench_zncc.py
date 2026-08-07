@@ -31,10 +31,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src import matcher  # noqa: E402
+from src import config, matcher  # noqa: E402
 
 SEARCH_EDGE = 1000
 TEMPLATE_EDGES = (50, 100, 150, 200)
+NMS_RADII = (2, 4, 8, 16)
 DEFAULT_REPEATS = 30
 WARMUP = 3
 
@@ -122,6 +123,56 @@ def time_one(template_edge: int, search_edge: int, repeats: int) -> TimingResult
     )
 
 
+def time_peaks(template_edge: int, search_edge: int, repeats: int, nms_radius: int) -> TimingResult:
+    """Time :func:`src.matcher.top_k_peaks` on a realistic correlation surface.
+
+    Uses a surface produced by the real Stage 3, not synthetic noise: peak
+    extraction cost depends on how many local maxima exist, and a periodic
+    surface has far more of them than random data.
+
+    Parameters
+    ----------
+    template_edge
+        Template edge length in pixels.
+    search_edge
+        Search-image edge length in pixels.
+    repeats
+        Number of timed iterations.
+    nms_radius
+        Suppression radius in surface pixels.
+
+    Returns
+    -------
+    TimingResult
+        Timing statistics in milliseconds.
+    """
+    search = make_field((search_edge, search_edge))
+    template = np.ascontiguousarray(search[100 : 100 + template_edge, 200 : 200 + template_edge])
+    surface = matcher.zncc_surface(template, search)
+
+    for _ in range(WARMUP):
+        matcher.top_k_peaks(surface, k=config.DEFAULT_TOP_K, nms_radius=nms_radius)
+
+    samples: list[float] = []
+    for _ in range(repeats):
+        started = time.perf_counter()
+        matcher.top_k_peaks(surface, k=config.DEFAULT_TOP_K, nms_radius=nms_radius)
+        samples.append((time.perf_counter() - started) * 1000.0)
+
+    samples.sort()
+    return TimingResult(
+        template_edge=template_edge,
+        search_edge=search_edge,
+        surface_pixels=int(surface.size),
+        repeats=repeats,
+        median_ms=statistics.median(samples),
+        p95_ms=samples[min(len(samples) - 1, int(0.95 * len(samples)))],
+        mean_ms=statistics.fmean(samples),
+        min_ms=samples[0],
+        max_ms=samples[-1],
+    )
+
+
 def describe_host() -> dict[str, str]:
     """Return a description of the machine, for the results table.
 
@@ -183,17 +234,44 @@ def main(argv: list[str] | None = None) -> int:
             f"{result.mean_ms:>9.2f}m"
         )
 
+    print()
+    print(f"Stage 3b - top_k_peaks (k={config.DEFAULT_TOP_K}), on a real Stage 3 surface")
+    print(f"{'radius':>10} {'surface':>12} {'median':>10} {'p95':>10} {'mean':>10}")
+    print("-" * len(header))
+
+    peak_results = []
+    for radius in NMS_RADII:
+        result = time_peaks(100, SEARCH_EDGE, args.repeats, radius)
+        peak_results.append((radius, result))
+        print(
+            f"{radius:>10} "
+            f"{result.surface_pixels:>12,} "
+            f"{result.median_ms:>9.2f}m "
+            f"{result.p95_ms:>9.2f}m "
+            f"{result.mean_ms:>9.2f}m"
+        )
+
     headline = next(r for r in results if r.template_edge == 100)
+    headline_peaks = next(r for radius, r in peak_results if radius == 8)
+    combined = headline.median_ms + headline_peaks.median_ms
     print()
     print(
         f"Headline: {headline.median_ms:.2f} ms median "
-        f"({headline.p95_ms:.2f} ms p95) for a 100x100 template "
+        f"({headline.p95_ms:.2f} ms p95) for Stage 3 with a 100x100 template "
         f"on a {SEARCH_EDGE}x{SEARCH_EDGE} search image."
+    )
+    print(
+        f"          {headline_peaks.median_ms:.2f} ms median for Stage 3b at radius 8, "
+        f"so {combined:.2f} ms for the pair."
     )
 
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"host": host, "results": [asdict(r) for r in results]}
+        payload = {
+            "host": host,
+            "stage3": [asdict(r) for r in results],
+            "stage3b": [{"nms_radius": radius, **asdict(r)} for radius, r in peak_results],
+        }
         args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"Wrote {args.json}")
 

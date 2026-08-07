@@ -42,6 +42,7 @@ from src.confidence import ConfidenceModel, is_low_confidence
 from src.types import (
     AnyArray,
     Diagnostics,
+    FailureMode,
     FloatArray,
     LocalizationResult,
     Mode,
@@ -49,6 +50,17 @@ from src.types import (
 )
 
 __all__ = ["localize", "main"]
+
+
+class _NoCandidatesError(RuntimeError):
+    """Peak extraction produced no candidates.
+
+    Separated from ordinary failures because it is not a defect. A correlation
+    surface with no distinguishable peak means the evidence genuinely does not
+    single out a position — an SNR collapse, or a template carrying no signal.
+    Reporting it as an internal error would hide a real, classifiable outcome
+    behind a generic one and corrupt the failure taxonomy the writeup rests on.
+    """
 
 
 # ===========================================================================
@@ -96,6 +108,7 @@ def _fallback_result(
     search: AnyArray,
     diagnostics: Diagnostics,
     reason: str,
+    failure_mode: FailureMode = "internal_error",
 ) -> LocalizationResult:
     """Build the degraded answer used when localization cannot complete.
 
@@ -107,13 +120,17 @@ def _fallback_result(
         Evidence gathered before the failure. Annotated in place.
     reason
         Short description of what went wrong, recorded in the diagnostics.
+    failure_mode
+        Classification from the failure taxonomy. Defaults to ``internal_error``;
+        callers that can name the cause more precisely should do so, because the
+        taxonomy is what the failure analysis is written from.
 
     Returns
     -------
     LocalizationResult
         Centre-of-image answer, zero confidence, flagged.
     """
-    diagnostics.failure_mode = "internal_error"
+    diagnostics.failure_mode = failure_mode
     diagnostics.with_note(reason)
 
     shape = getattr(search, "shape", None)
@@ -162,8 +179,12 @@ def _run_pipeline(
 
     Raises
     ------
+    _NoCandidatesError
+        If peak extraction finds nothing, which means the correlation surface
+        carries no distinguishable maximum.
     ValueError
-        If no candidate survives peak extraction, or the geometry is impossible.
+        If the geometry is impossible, such as a template larger than the
+        search image.
     """
     psf_sigma = matcher.estimate_psf_sigma(search)
     template = matcher.build_template(
@@ -179,8 +200,8 @@ def _run_pipeline(
         nms_radius=config.DEFAULT_NMS_RADIUS_PX,
     )
     if not peaks:
-        msg = "peak extraction returned no candidates"
-        raise ValueError(msg)
+        msg = "correlation surface has no distinguishable peak"
+        raise _NoCandidatesError(msg)
 
     # Stage 4 is R3's. Until disambiguate.select_candidate exists, take the
     # strongest peak — which is exactly the mandated plain-NCC baseline
@@ -288,6 +309,8 @@ def localize(
             low_confidence_flag=is_low_confidence(confidence, diagnostics),
             diagnostics=diagnostics,
         )
+    except _NoCandidatesError as exc:
+        result = _fallback_result(search, diagnostics, str(exc), failure_mode="snr_collapse")
     except Exception as exc:  # noqa: BLE001 - the never-raises contract is the point
         result = _fallback_result(search, diagnostics, f"{type(exc).__name__}: {exc}")
 

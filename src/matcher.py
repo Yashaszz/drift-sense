@@ -36,6 +36,15 @@ import numpy as np
 from src import config
 from src.types import AnyArray, BoolArray, FloatArray, Peak, Shape2D
 
+_FLAT_SURFACE_ATOL: float = 1e-12
+"""Range below which a correlation surface is treated as carrying no peaks.
+
+A surface with no variation distinguishes no position, so the honest answer is
+an empty candidate list rather than an arbitrary one. Short-circuiting also
+avoids a performance cliff: on a perfectly flat surface every one of the ~800000
+positions is technically a local maximum.
+"""
+
 _MIN_TEMPLATE_STD: float = 1e-6
 """Standard deviation below which a template is treated as carrying no signal.
 
@@ -446,29 +455,67 @@ def _zncc_masked_fft(
 
 
 def _local_maxima(surface: FloatArray, radius: int) -> BoolArray:
-    """Mark strict local maxima within a square neighbourhood.
+    """Mark local maxima within a square neighbourhood.
 
     Parameters
     ----------
     surface
         Correlation surface.
     radius
-        Neighbourhood half-width in pixels.
+        Neighbourhood half-width in pixels. A radius of zero marks every
+        position, since each is trivially the maximum of a neighbourhood
+        containing only itself.
 
     Returns
     -------
     BoolArray
-        Mask, same shape as ``surface``, true at local maxima.
+        Mask, same shape as ``surface``, true where a position equals the
+        maximum over its neighbourhood.
 
     Raises
     ------
     ValueError
         If ``radius`` is negative.
+
+    Notes
+    -----
+    The neighbourhood is square, not circular, and the suppression in
+    :func:`top_k_peaks` uses the same square metric. That is deliberate: an
+    orthogonal DRAM lattice has square cells, so a Chebyshev radius of half the
+    pitch covers exactly one cell. A Euclidean radius of the same size would
+    leave the cell corners unsuppressed and admit duplicate candidates from a
+    single cell.
+
+    A position must also have *variation* in its neighbourhood. Equalling the
+    neighbourhood maximum is not sufficient, because every point of a constant
+    region trivially satisfies it: a surface with a flat background would report
+    hundreds of thousands of "maxima" carrying no information. Requiring the
+    neighbourhood range to be non-zero excludes flat regions while still marking
+    the rim of a genuine plateau, which the greedy suppression in
+    :func:`top_k_peaks` then thins to one representative.
+
+    A radius of zero is exempt from the variation test and marks everything,
+    which is the documented meaning of "no suppression".
     """
     if radius < 0:
         msg = f"radius must be non-negative, got {radius!r}"
         raise ValueError(msg)
-    return np.zeros(surface.shape, dtype=np.bool_)
+    if radius == 0:
+        return np.ones(surface.shape, dtype=np.bool_)
+
+    # cv2.dilate and cv2.erode over a rectangular kernel are exactly the sliding
+    # maximum and minimum. They are used in preference to scipy's rank filters
+    # because OpenCV's implementation is O(1) per pixel in the kernel size,
+    # whereas scipy's cost grows with it: at radius 8 on a 901x901 surface that
+    # is the difference between roughly 2 ms and roughly 28 ms, which matters
+    # when the whole Robust-mode budget is 100 ms.
+    kernel = np.ones((2 * radius + 1, 2 * radius + 1), dtype=np.uint8)
+    neighbourhood_max = cv2.dilate(surface, kernel, borderType=cv2.BORDER_REPLICATE)
+    neighbourhood_min = cv2.erode(surface, kernel, borderType=cv2.BORDER_REPLICATE)
+
+    is_maximum = surface >= neighbourhood_max
+    has_variation = (neighbourhood_max - neighbourhood_min) > _FLAT_SURFACE_ATOL
+    return np.asarray(is_maximum & has_variation, dtype=np.bool_)
 
 
 def top_k_peaks(surface: FloatArray, k: int, nms_radius: int) -> list[Peak]:
@@ -492,25 +539,60 @@ def top_k_peaks(surface: FloatArray, k: int, nms_radius: int) -> list[Peak]:
     Returns
     -------
     list of Peak
-        At most ``k`` peaks, sorted by descending score. Returns fewer when the
-        surface holds fewer separated maxima; the list is never padded. Returns
-        an empty list when ``k`` is non-positive or the surface is empty.
+        At most ``k`` peaks, sorted by descending score, each separated from
+        every other by more than ``nms_radius`` in Chebyshev distance. Returns
+        fewer when the surface holds fewer separated maxima; the list is never
+        padded. Returns an empty list when ``k`` is non-positive, the surface is
+        empty, or the surface is flat.
 
     Raises
     ------
     ValueError
         If ``nms_radius`` is negative.
+
+    Notes
+    -----
+    A flat surface returns no candidates at all. That is the honest answer — if
+    every position scores identically then none is distinguishable — and it lets
+    the caller report an SNR collapse rather than invent a peak. It also avoids a
+    pathological case: on a perfectly flat surface every position is technically
+    a local maximum, so the candidate list would run to hundreds of thousands of
+    entries carrying no information.
     """
     if nms_radius < 0:
         msg = f"nms_radius must be non-negative, got {nms_radius!r}"
         raise ValueError(msg)
     if k <= 0 or surface.size == 0:
         return []
-    # Placeholder: a single candidate at the surface centre, so the downstream
-    # chain is exercised end-to-end. Real extraction lands in T3.
-    row = surface.shape[0] // 2
-    col = surface.shape[1] // 2
-    return [Peak(col=col, row=row, score=float(surface[row, col]))]
+
+    if float(surface.max()) - float(surface.min()) <= _FLAT_SURFACE_ATOL:
+        return []
+
+    candidates = np.flatnonzero(_local_maxima(surface, nms_radius))
+    scores = surface.ravel()[candidates]
+    # Stable ordering so that equal scores resolve in raster order, which keeps
+    # the output reproducible across runs and platforms.
+    order = np.argsort(-scores, kind="stable")
+
+    rows, cols = surface.shape
+    suppressed = np.zeros(surface.shape, dtype=np.bool_)
+    peaks: list[Peak] = []
+
+    for position in order:
+        row, col = divmod(int(candidates[position]), cols)
+        if suppressed[row, col]:
+            continue
+
+        peaks.append(Peak(col=col, row=row, score=float(scores[position])))
+        if len(peaks) >= k:
+            break
+
+        suppressed[
+            max(0, row - nms_radius) : min(rows, row + nms_radius + 1),
+            max(0, col - nms_radius) : min(cols, col + nms_radius + 1),
+        ] = True
+
+    return peaks
 
 
 # ===========================================================================
