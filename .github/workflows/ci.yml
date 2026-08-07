@@ -13,27 +13,30 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Set up Python
-        run: uv python install 3.12
-
+      # `uv sync` builds an isolated project venv from the committed lockfile.
+      # An earlier revision used `uv pip install --system`, which fails on
+      # ubuntu-latest: its interpreter is PEP 668 externally-managed and uv
+      # rightly refuses to install into it. The Python version comes from
+      # .python-version, so CI and every developer machine agree.
       - name: Install project
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --all-extras
 
       - name: Ruff (lint)
-        run: ruff check src tests
+        run: uv run ruff check src tests benchmarks
 
       - name: Ruff (format)
-        run: ruff format --check src tests
+        run: uv run ruff format --check src tests benchmarks
 
       - name: MyPy
-        run: mypy
+        run: uv run mypy
 
       - name: Pytest
-        run: pytest
+        run: uv run pytest

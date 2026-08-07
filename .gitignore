@@ -260,7 +260,11 @@ submission/
 htmlcov/
 .coverage
 .coverage.*
-uv.lock
+
+# NOTE: uv.lock is deliberately NOT ignored. This is an application, not a
+# library, and the submission has to reproduce an exact environment. The
+# lockfile is what makes every teammate's machine, CI, and the graders' clean
+# unzip resolve to the same versions.
 
 # OS noise
 Thumbs.db
