@@ -1,0 +1,25 @@
+# Normalise line endings across the team.
+#
+# Four people on potentially different operating systems commit to this repo.
+# Without this, Windows checkouts rewrite every line on save and the resulting
+# whole-file diffs cause merge conflicts that have nothing to do with the code.
+# Text is stored LF in the repository and checked out LF everywhere.
+* text=auto eol=lf
+
+# Binary assets: never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tif binary
+*.tiff binary
+*.pdf binary
+*.npy binary
+*.npz binary
+*.joblib binary
+*.pkl binary
+*.pt binary
+*.pth binary
+*.zip binary
+
+# Notebooks diff badly; mark them so Git does not attempt merges.
+*.ipynb -merge
