@@ -183,8 +183,7 @@ def _rect_mask(xs: FloatArray, ys: FloatArray, rect: Rect) -> BoolArray:
     BoolArray
         ``True`` inside the rectangle.
     """
-    inside = (xs >= rect.x0_nm) & (xs <= rect.x1_nm) & (ys >= rect.y0_nm) & (ys <= rect.y1_nm)
-    return inside
+    return (xs >= rect.x0_nm) & (xs <= rect.x1_nm) & (ys >= rect.y0_nm) & (ys <= rect.y1_nm)
 
 
 def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray:
@@ -205,13 +204,12 @@ def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray
         ``True`` inside the bar.
     """
     half = line.width_nm / 2.0
-    inside = (
+    return (
         (xs >= line.x_nm - half)
         & (xs <= line.x_nm + half)
         & (ys >= line.y0_nm)
         & (ys <= line.y1_nm)
     )
-    return inside
 
 
 # ===========================================================================
