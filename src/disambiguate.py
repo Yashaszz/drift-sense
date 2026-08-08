@@ -176,8 +176,23 @@ def select_candidate(
         If ``peaks`` is empty. Callers must handle an empty shortlist before
         reaching here; there is no sensible candidate to invent.
     """
-    del image_centre, tolerance  # stub: tie-break logic is R3's work
+
     if not peaks:
         msg = "select_candidate requires at least one candidate peak"
         raise ValueError(msg)
-    return (peaks[0], False)
+
+    best_score = max(p.score for p in peaks)
+    tied = [p for p in peaks if best_score - p.score <= tolerance]
+
+    if len(tied) == 1:
+        return (tied[0], False)
+
+    # Distances compared in raw (col, row). The top-left -> centre offset is
+    # the same constant for every peak (one template), so it shifts all
+    # candidates equally and cannot change which is nearest to the centre.
+    centre_x, centre_y = image_centre
+    nearest = min(
+        tied,
+        key=lambda p: (p.col - centre_x) ** 2 + (p.row - centre_y) ** 2,
+    )
+    return (nearest, True)
