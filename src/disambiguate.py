@@ -176,7 +176,6 @@ def select_candidate(
         If ``peaks`` is empty. Callers must handle an empty shortlist before
         reaching here; there is no sensible candidate to invent.
     """
-
     if not peaks:
         msg = "select_candidate requires at least one candidate peak"
         raise ValueError(msg)
