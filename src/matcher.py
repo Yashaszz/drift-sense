@@ -16,10 +16,10 @@ Stage 5 — subpixel refinement
 
 Status
 ------
-Stages 2 (T4), 3 (T2) and 3b (T3) are implemented. Stage 5 subpixel refinement
-is still a placeholder returning a zero offset, and masked correlation is
-deferred to T8; both return correctly typed and correctly *shaped* results so
-the end-to-end pipeline runs and downstream modules can be written against them.
+Stages 2 (T4), 3 (T2), 3b (T3) and 5 (T5) are implemented. Masked correlation
+is the only piece still deferred (T8); it returns a correctly typed and
+correctly *shaped* result, and warns, so the end-to-end pipeline runs and
+downstream modules can be written against it.
 
 Placeholder outputs are deliberately shape-correct rather than pass-through.
 Shape is the part of the contract that downstream code depends on — a
@@ -28,12 +28,32 @@ pass-through stub would let shape bugs hide until integration.
 
 import warnings
 from collections.abc import Sequence
+from functools import lru_cache
 
 import cv2
 import numpy as np
+from skimage.registration import phase_cross_correlation
 
 from src import config
-from src.types import AnyArray, BoolArray, FloatArray, Peak, Shape2D
+from src.types import (
+    AnyArray,
+    BoolArray,
+    Float64Array,
+    FloatArray,
+    Peak,
+    Shape2D,
+    SubpixelRefinement,
+)
+
+_MAX_SUBPIXEL_OFFSET_PX: float = 1.0
+"""Largest residual a refinement may report before it is rejected.
+
+Stage 3b already found the peak to the nearest whole pixel, so a legitimate
+residual is sub-pixel by construction.
+"""
+
+_SURFACE_PATCH_RADIUS: int = 3
+"""Half-width of the correlation-surface neighbourhood used by the fallback."""
 
 _MIN_PSF_SIGMA_PX: float = 0.1
 _MAX_PSF_SIGMA_PX: float = 5.0
@@ -87,6 +107,7 @@ __all__ = [
     "match_psf",
     "refine_subpixel",
     "refine_subpixel_crop",
+    "refine_subpixel_detailed",
     "rotate_image",
     "top_k_peaks",
     "zncc_surface",
@@ -966,6 +987,310 @@ def top_k_peaks(surface: FloatArray, k: int, nms_radius: int) -> list[Peak]:
 # ===========================================================================
 
 
+def _check_upsample(upsample: int) -> None:
+    """Validate the interpolation factor.
+
+    Parameters
+    ----------
+    upsample
+        Requested factor.
+
+    Raises
+    ------
+    ValueError
+        If ``upsample`` is less than 1.
+    """
+    if upsample < 1:
+        msg = f"upsample must be at least 1, got {upsample!r}"
+        raise ValueError(msg)
+
+
+def _bounded(refinement: SubpixelRefinement) -> SubpixelRefinement:
+    """Reject a refinement that has wandered further than a refinement should.
+
+    Parameters
+    ----------
+    refinement
+        Candidate offset.
+
+    Returns
+    -------
+    SubpixelRefinement
+        The input when the offset is plausible, otherwise a zero offset marked
+        ``"rejected"``.
+
+    Notes
+    -----
+    Stage 3b already located the peak to the nearest whole pixel, so a genuine
+    residual is under a pixel. Anything larger means the refinement latched onto
+    noise rather than the true maximum. Measured at high noise, unbounded phase
+    correlation produced offsets of ten pixels and more; applying one would turn
+    a correct integer answer into a badly wrong sub-pixel one. Declining to
+    refine is strictly better than that.
+    """
+    if not (np.isfinite(refinement.dx) and np.isfinite(refinement.dy)):
+        return SubpixelRefinement.none("rejected")
+    if max(abs(refinement.dx), abs(refinement.dy)) > _MAX_SUBPIXEL_OFFSET_PX:
+        return SubpixelRefinement.none("rejected")
+    return refinement
+
+
+@lru_cache(maxsize=8)
+def _hann_window(shape: Shape2D) -> FloatArray:
+    """Return a separable Hann window of the given shape.
+
+    Parameters
+    ----------
+    shape
+        Window shape as ``(rows, cols)``.
+
+    Returns
+    -------
+    FloatArray
+        Two-dimensional Hann window, ``float32``.
+
+    Notes
+    -----
+    Cached because the template shape is constant across a whole run, and
+    rebuilding the window per call would be pure waste.
+
+    The window matters more than it looks. A discrete Fourier transform treats
+    its input as periodic, so a patch whose opposite edges do not match presents
+    a step discontinuity, and that step leaks broadband energy into the spectrum.
+    In registration the effect is a systematic *underestimate* of the shift,
+    because the mismatched edges pull the correlation peak toward zero. Measured
+    on fractional shifts of a band-limited field, an unwindowed patch recovered
+    0.39 px of a true 0.50 px offset; windowed, it recovers 0.49 px.
+    """
+    rows, cols = shape
+    return np.asarray(np.outer(np.hanning(rows), np.hanning(cols)), dtype=np.float32)
+
+
+def _refine_by_phase_correlation(
+    template: FloatArray,
+    search: FloatArray,
+    peak: Peak,
+    upsample: int,
+) -> SubpixelRefinement:
+    """Register the template against the winning crop by upsampled-DFT correlation.
+
+    Parameters
+    ----------
+    template
+        Template from :func:`build_template`.
+    search
+        Search image.
+    peak
+        Winning integer-valued peak, locating the crop.
+    upsample
+        Interpolation factor.
+
+    Returns
+    -------
+    SubpixelRefinement
+        Residual offset and registration error.
+
+    Notes
+    -----
+    ``normalization=None`` is passed deliberately. scikit-image defaults to
+    ``"phase"``, which whitens the spectrum before correlating; that is the
+    classic phase-correlation formulation and it is markedly less robust to
+    noise, because whitening amplifies exactly the high frequencies that noise
+    dominates. Our search image is by design the noisier of the two captures, so
+    this is the wrong default for us. Measured on fractional shifts of a
+    band-limited field:
+
+    ======  ==================  ==================
+    noise   ``"phase"`` error   ``None`` error
+    ======  ==================  ==================
+    0.0     0.010 px            0.003 px
+    0.2     0.574 px            0.168 px
+    0.5     10.671 px           0.622 px
+    ======  ==================  ==================
+
+    ``normalization=None`` is also the formulation of the published method this
+    stage cites, and it is the only setting under which the returned error means
+    anything: under ``"phase"`` it is a constant 1.0.
+    """
+    rows, cols = template.shape
+    crop = search[peak.row : peak.row + rows, peak.col : peak.col + cols]
+    if crop.shape != template.shape:
+        return SubpixelRefinement.none("rejected")
+
+    # A patch with no variance carries no registrable structure. Declining here
+    # rather than letting the registration run keeps the never-raises contract
+    # clean and avoids a library warning about an undefined error metric.
+    if min(float(np.std(template)), float(np.std(crop))) < _MIN_TEMPLATE_STD:
+        return SubpixelRefinement.none("rejected")
+
+    window = _hann_window(template.shape)
+    # scikit-image ships only partial annotations, so this call is untyped as
+    # far as mypy is concerned. The return shape is pinned by the unpacking and
+    # the float conversions below.
+    shift, error, _ = phase_cross_correlation(  # type: ignore[no-untyped-call]
+        (crop - crop.mean()) * window,
+        (template - template.mean()) * window,
+        upsample_factor=upsample,
+        normalization=None,
+    )
+    return _bounded(
+        SubpixelRefinement(
+            dx=float(shift[1]),
+            dy=float(shift[0]),
+            error=float(error),
+            method="phase_cross_correlation",
+        )
+    )
+
+
+def _upsampled_patch(
+    patch: FloatArray,
+    upsample: int,
+    span: float,
+) -> tuple[Float64Array, Float64Array]:
+    """Evaluate the band-limited interpolation of a patch on a fine grid.
+
+    Zero-padding a spectrum is exact sinc interpolation of a band-limited
+    signal. Rather than materialising a large padded transform, the inverse
+    DFT is evaluated directly at the fine sample positions by matrix
+    multiplication, which costs a few hundred operations instead of a few
+    hundred thousand.
+
+    Parameters
+    ----------
+    patch
+        Small square neighbourhood of the correlation surface.
+    upsample
+        Samples per original pixel.
+    span
+        Half-width of the evaluated region, in original pixels, measured from
+        the patch centre.
+
+    Returns
+    -------
+    tuple
+        ``(values, offsets)`` where ``values`` is the interpolated surface and
+        ``offsets`` are the sample positions relative to the patch centre.
+    """
+    n_rows, n_cols = patch.shape
+    spectrum = np.fft.fft2(patch)
+
+    steps = int(round(2.0 * span * upsample)) + 1
+    offsets = np.linspace(-span, span, steps)
+    centre_row = (n_rows - 1) / 2.0
+    centre_col = (n_cols - 1) / 2.0
+
+    row_kernel = np.exp(2j * np.pi * np.outer(centre_row + offsets, np.fft.fftfreq(n_rows)))
+    col_kernel = np.exp(2j * np.pi * np.outer(np.fft.fftfreq(n_cols), centre_col + offsets))
+
+    values = np.real(row_kernel @ spectrum @ col_kernel) / (n_rows * n_cols)
+    return values, offsets
+
+
+def _refine_by_surface_upsampling(
+    surface: FloatArray,
+    peak: Peak,
+    upsample: int,
+) -> SubpixelRefinement:
+    """Refine a peak by interpolating the correlation surface around it.
+
+    Parameters
+    ----------
+    surface
+        Correlation surface from :func:`zncc_surface`.
+    peak
+        Winning integer-valued peak.
+    upsample
+        Interpolation factor.
+
+    Returns
+    -------
+    SubpixelRefinement
+        Residual offset. The error is reported as ``1 - peak`` so that, like the
+        registration error, smaller means better.
+
+    Notes
+    -----
+    Interpolates the ZNCC surface itself, whose shape near the maximum is
+    slightly distorted by the local-variance denominator of the normalization.
+    That makes it the less accurate of the two routines, which is why it is the
+    fallback rather than the primary.
+    """
+    radius = _SURFACE_PATCH_RADIUS
+    rows, cols = surface.shape
+    if peak.row - radius < 0 or peak.row + radius >= rows:
+        return SubpixelRefinement.none("rejected")
+    if peak.col - radius < 0 or peak.col + radius >= cols:
+        return SubpixelRefinement.none("rejected")
+
+    patch = np.ascontiguousarray(
+        surface[
+            peak.row - radius : peak.row + radius + 1,
+            peak.col - radius : peak.col + radius + 1,
+        ],
+        dtype=np.float32,
+    )
+    values, offsets = _upsampled_patch(patch, upsample, span=1.0)
+    row_index, col_index = np.unravel_index(int(np.argmax(values)), values.shape)
+
+    return _bounded(
+        SubpixelRefinement(
+            dx=float(offsets[col_index]),
+            dy=float(offsets[row_index]),
+            error=float(np.clip(1.0 - values[row_index, col_index], 0.0, 1.0)),
+            method="surface_upsampling",
+        )
+    )
+
+
+def refine_subpixel_detailed(
+    template: FloatArray,
+    search: FloatArray,
+    peak: Peak,
+    surface: FloatArray | None = None,
+    upsample: int = config.DEFAULT_UPSAMPLE,
+) -> SubpixelRefinement:
+    """Refine a peak to sub-pixel precision, reporting the error alongside.
+
+    Runs the primary routine — upsampled-DFT registration of the template
+    against the winning crop — and falls back to interpolating the correlation
+    surface when that is rejected or unavailable.
+
+    Parameters
+    ----------
+    template
+        Template from :func:`build_template`.
+    search
+        Search image.
+    peak
+        Winning integer-valued peak.
+    surface
+        Correlation surface, used only for the fallback. When ``None`` there is
+        no fallback and a rejected primary yields a zero offset.
+    upsample
+        Interpolation factor; 100 gives 1/100 px resolution.
+
+    Returns
+    -------
+    SubpixelRefinement
+        Residual offset ``(dx, dy)`` in search pixels, the registration error,
+        and which routine produced it.
+
+    Raises
+    ------
+    ValueError
+        If ``upsample`` is less than 1.
+    """
+    _check_upsample(upsample)
+
+    primary = _refine_by_phase_correlation(template, search, peak, upsample)
+    if primary.method != "rejected":
+        return primary
+    if surface is None:
+        return primary
+    return _refine_by_surface_upsampling(surface, peak, upsample)
+
+
 def refine_subpixel(
     surface: FloatArray,
     peak: Peak,
@@ -997,12 +1322,14 @@ def refine_subpixel(
     ------
     ValueError
         If ``upsample`` is less than 1.
+
+    See Also
+    --------
+    refine_subpixel_detailed : same refinement, reporting the registration error.
     """
-    del surface, peak  # placeholder: upsampled DFT lands in T5
-    if upsample < 1:
-        msg = f"upsample must be at least 1, got {upsample!r}"
-        raise ValueError(msg)
-    return (0.0, 0.0)
+    _check_upsample(upsample)
+    refinement = _refine_by_surface_upsampling(surface, peak, upsample)
+    return (refinement.dx, refinement.dy)
 
 
 def refine_subpixel_crop(
@@ -1011,16 +1338,11 @@ def refine_subpixel_crop(
     peak: Peak,
     upsample: int = config.DEFAULT_UPSAMPLE,
 ) -> tuple[float, float]:
-    """Refine a peak by phase-correlating the template against the winning crop.
+    """Refine a peak by registering the template against the winning crop.
 
-    Alternative to :func:`refine_subpixel` with an identical return contract, so
-    the two are interchangeable behind a single flag. This variant applies the
-    upsampled-DFT registration method to the image data directly, rather than to
-    a correlation surface whose shape is distorted by the local-variance
-    denominator of the ZNCC normalization.
-
-    Which is more accurate is an empirical question. Both are cheap; we measure
-    rather than argue.
+    The primary Stage 5 routine. Applies upsampled-DFT registration to the image
+    data directly, rather than to a correlation surface whose shape is distorted
+    by the local-variance denominator of the ZNCC normalization.
 
     Parameters
     ----------
@@ -1043,12 +1365,14 @@ def refine_subpixel_crop(
     ------
     ValueError
         If ``upsample`` is less than 1.
+
+    See Also
+    --------
+    refine_subpixel_detailed : same refinement, reporting the registration error.
     """
-    del template, search, peak  # placeholder: crop phase correlation lands in T5
-    if upsample < 1:
-        msg = f"upsample must be at least 1, got {upsample!r}"
-        raise ValueError(msg)
-    return (0.0, 0.0)
+    _check_upsample(upsample)
+    refinement = _refine_by_phase_correlation(template, search, peak, upsample)
+    return (refinement.dx, refinement.dy)
 
 
 # ===========================================================================

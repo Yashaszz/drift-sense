@@ -32,10 +32,13 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config, matcher  # noqa: E402
+from src.types import Peak  # noqa: E402
 
 SEARCH_EDGE = 1000
 TEMPLATE_EDGES = (50, 100, 150, 200)
 NMS_RADII = (2, 4, 8, 16)
+NOISE_LEVELS = (0.0, 0.02, 0.05, 0.1, 0.3)
+SUBPIXEL_TRIALS = 25
 DEFAULT_REPEATS = 30
 WARMUP = 3
 
@@ -173,6 +176,89 @@ def time_peaks(template_edge: int, search_edge: int, repeats: int, nms_radius: i
     )
 
 
+def fourier_shift(image: np.ndarray, dy: float, dx: float) -> np.ndarray:
+    """Translate an image by an exact fractional offset via its spectrum.
+
+    Parameters
+    ----------
+    image
+        Source image.
+    dy
+        Row offset in pixels.
+    dx
+        Column offset in pixels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shifted image, ``float32``.
+    """
+    spectrum = np.fft.fft2(image)
+    freq_row = np.fft.fftfreq(image.shape[0])[:, None]
+    freq_col = np.fft.fftfreq(image.shape[1])[None, :]
+    ramp = np.exp(-2j * np.pi * (freq_row * dy + freq_col * dx))
+    return np.real(np.fft.ifft2(spectrum * ramp)).astype(np.float32)
+
+
+def bench_subpixel(trials: int, noise_levels: tuple[float, ...]) -> list[dict[str, float]]:
+    """Measure Stage 5 accuracy and runtime against exact fractional shifts.
+
+    Ground truth comes from a Fourier-domain translation, which is an exact
+    fractional shift rather than an interpolated approximation. Comparing
+    against an interpolated target would measure the interpolator instead of the
+    estimator.
+
+    Parameters
+    ----------
+    trials
+        Random offsets evaluated per noise level.
+    noise_levels
+        Noise standard deviations to sweep.
+
+    Returns
+    -------
+    list of dict
+        One record per noise level with median and p95 error, in pixels, for
+        both refinement routines, plus the primary routine's runtime.
+    """
+    field = make_field((256, 256), seed=3)
+    template = np.ascontiguousarray(field[60:124, 90:154])
+    peak = Peak(col=90, row=60, score=1.0)
+
+    records = []
+    for noise in noise_levels:
+        rng = np.random.default_rng(0)
+        primary, fallback, timings, integer = [], [], [], []
+
+        for _ in range(trials):
+            offset_y, offset_x = rng.uniform(-0.5, 0.5, 2)
+            search = fourier_shift(field, offset_y, offset_x)
+            if noise > 0.0:
+                search = (search + rng.normal(0.0, noise, search.shape)).astype(np.float32)
+            surface = matcher.zncc_surface(template, search)
+
+            started = time.perf_counter()
+            refined = matcher.refine_subpixel_detailed(template, search, peak, surface=surface)
+            timings.append((time.perf_counter() - started) * 1000.0)
+
+            coarse_x, coarse_y = matcher.refine_subpixel(surface, peak)
+            integer.append(np.hypot(offset_x, offset_y))
+            primary.append(np.hypot(offset_x - refined.dx, offset_y - refined.dy))
+            fallback.append(np.hypot(offset_x - coarse_x, offset_y - coarse_y))
+
+        records.append(
+            {
+                "noise": noise,
+                "integer_median": float(np.median(integer)),
+                "primary_median": float(np.median(primary)),
+                "primary_p95": float(np.percentile(primary, 95)),
+                "fallback_median": float(np.median(fallback)),
+                "median_ms": float(np.median(timings)),
+            }
+        )
+    return records
+
+
 def describe_host() -> dict[str, str]:
     """Return a description of the machine, for the results table.
 
@@ -249,6 +335,25 @@ def main(argv: list[str] | None = None) -> int:
             f"{result.median_ms:>9.2f}m "
             f"{result.p95_ms:>9.2f}m "
             f"{result.mean_ms:>9.2f}m"
+        )
+
+    print()
+    print("Stage 5 - sub-pixel refinement, against exact Fourier-domain shifts")
+    print(
+        f"{'noise':>10} {'no refine':>11} {'primary':>10} {'p95':>9} "
+        f"{'fallback':>10} {'runtime':>10}"
+    )
+    print("-" * 64)
+
+    subpixel = bench_subpixel(SUBPIXEL_TRIALS, NOISE_LEVELS)
+    for record in subpixel:
+        print(
+            f"{record['noise']:>10.2f} "
+            f"{record['integer_median']:>10.3f}p "
+            f"{record['primary_median']:>9.3f}p "
+            f"{record['primary_p95']:>8.3f}p "
+            f"{record['fallback_median']:>9.3f}p "
+            f"{record['median_ms']:>9.2f}m"
         )
 
     headline = next(r for r in results if r.template_edge == 100)

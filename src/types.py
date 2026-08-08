@@ -129,6 +129,49 @@ class Peak:
         return config.window_topleft_to_centre(self.col, self.row, template_shape)
 
 
+@dataclass(frozen=True, slots=True)
+class SubpixelRefinement:
+    """Outcome of Stage 5 sub-pixel refinement.
+
+    Attributes
+    ----------
+    dx
+        Residual offset along the column axis, in search pixels, to be *added*
+        to the integer peak position.
+    dy
+        Residual offset along the row axis, in search pixels.
+    error
+        Normalized RMS registration error in ``[0, 1]``. Low means the two
+        patches genuinely agree; high means the refinement is interpolating
+        noise and its offset should be treated with suspicion.
+    method
+        Which routine produced this, for the ablation table. One of
+        ``"phase_cross_correlation"``, ``"surface_upsampling"``, ``"rejected"``
+        or ``"none"``.
+    """
+
+    dx: float
+    dy: float
+    error: float
+    method: str
+
+    @classmethod
+    def none(cls, method: str = "none") -> "SubpixelRefinement":
+        """Return a zero refinement, used when no adjustment could be made.
+
+        Parameters
+        ----------
+        method
+            Label recording why there is no offset.
+
+        Returns
+        -------
+        SubpixelRefinement
+            Zero offset with an undefined error.
+        """
+        return cls(dx=0.0, dy=0.0, error=float("nan"), method=method)
+
+
 # ---------------------------------------------------------------------------
 # Pose
 # ---------------------------------------------------------------------------
@@ -207,6 +250,11 @@ class Diagnostics:
         Whether the mandated centre rule decided the answer.
     uniqueness_score
         Mean uniqueness of the reference — is there an aperiodic anchor at all?
+    subpixel_error
+        Normalized RMS error of the Stage 5 registration, or NaN when no
+        refinement was applied.
+    subpixel_method
+        Which refinement routine produced the final offset.
     mode_used
         Which operating mode actually ran.
     failure_mode
@@ -224,6 +272,8 @@ class Diagnostics:
     scale_est: float = config.NOMINAL_SCALE
     tie_break_used: bool = False
     uniqueness_score: float = 0.0
+    subpixel_error: float = float("nan")
+    subpixel_method: str = "none"
     mode_used: str = "fast"
     failure_mode: FailureMode = "none"
     elapsed_ms: float = 0.0

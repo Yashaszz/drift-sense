@@ -252,8 +252,18 @@ def _run_pipeline(
     diagnostics.scale_est = pose_estimate.scale
 
     centre_x, centre_y = best.centre(template.shape)
-    offset_x, offset_y = matcher.refine_subpixel(surface, best)
-    return (centre_x + offset_x, centre_y + offset_y)
+
+    refinement = matcher.refine_subpixel_detailed(
+        template,
+        search,
+        best,
+        surface=surface,
+        upsample=config.DEFAULT_UPSAMPLE,
+    )
+    diagnostics.subpixel_error = refinement.error
+    diagnostics.subpixel_method = refinement.method
+
+    return (centre_x + refinement.dx, centre_y + refinement.dy)
 
 
 def _resolve_pose(search: FloatArray, reference: FloatArray, mode: Mode) -> PoseEstimate:
