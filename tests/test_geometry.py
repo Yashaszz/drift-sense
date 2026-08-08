@@ -54,9 +54,7 @@ def test_zero_offset_reconstruction_is_bit_exact():
     image = rasterize(layout, (6000.0, 6000.0), config.REF_PX_NM, SMALL, supersample=2)
     base_x, base_y = raster_centre_base(SMALL)
 
-    exact = reconstruct_from_gt(
-        image, GroundTruth(base_x, base_y, 0.0, 1.0), out_size=SMALL
-    )
+    exact = reconstruct_from_gt(image, GroundTruth(base_x, base_y, 0.0, 1.0), out_size=SMALL)
     assert float(np.abs(image - exact).max()) == 0.0
 
 
@@ -158,9 +156,7 @@ def test_anchors_land_inside_the_reference_crop(architecture, seed):
     """
     rng = _rng(seed)
     plan = plan_pair(rng, extent_nm=EXTENT_NM, out_size=1000)
-    layout = _sample_layout(
-        architecture, rng, anchored=True, anchor_centre_nm=plan.crop_centre_nm
-    )
+    layout = _sample_layout(architecture, rng, anchored=True, anchor_centre_nm=plan.crop_centre_nm)
     assert count_anchors_in_reference(layout, plan, 1000) > 0
 
 
@@ -169,9 +165,7 @@ def test_unanchored_layouts_carry_no_anchors(architecture):
     """The control stratum must be genuinely anchor-free."""
     rng = _rng(1)
     plan = plan_pair(rng, extent_nm=EXTENT_NM, out_size=1000)
-    layout = _sample_layout(
-        architecture, rng, anchored=False, anchor_centre_nm=plan.crop_centre_nm
-    )
+    layout = _sample_layout(architecture, rng, anchored=False, anchor_centre_nm=plan.crop_centre_nm)
     assert layout.anchors == ()
     assert layout.erase == ()
 
@@ -181,12 +175,8 @@ def test_anchors_break_periodicity_in_the_rendered_image():
     rng = _rng(5)
     plan = plan_pair(rng, extent_nm=EXTENT_NM, out_size=SMALL)
     common = {"anchor_centre_nm": plan.crop_centre_nm}
-    anchored = generate_finfet_layout(
-        EXTENT_NM, 90.0, 24.0, 12.0, _rng(5), anchored=True, **common
-    )
-    plain = generate_finfet_layout(
-        EXTENT_NM, 90.0, 24.0, 12.0, _rng(5), anchored=False, **common
-    )
+    anchored = generate_finfet_layout(EXTENT_NM, 90.0, 24.0, 12.0, _rng(5), anchored=True, **common)
+    plain = generate_finfet_layout(EXTENT_NM, 90.0, 24.0, 12.0, _rng(5), anchored=False, **common)
 
     def self_similarity(layout):
         image = rasterize(layout, plan.crop_centre_nm, config.REF_PX_NM, SMALL, supersample=2)
