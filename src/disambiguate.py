@@ -192,6 +192,6 @@ def select_candidate(
     centre_x, centre_y = image_centre
     nearest = min(
         tied,
-        key=lambda p: (p.col - centre_x) ** 2 + (p.row - centre_y) ** 2,
+        key=lambda p: ((p.col - centre_x) ** 2 + (p.row - centre_y) ** 2, p.row, p.col),
     )
     return (nearest, True)
