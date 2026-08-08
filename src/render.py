@@ -92,7 +92,7 @@ def _dram_field(xs: FloatArray, ys: FloatArray, pattern: DramPattern) -> BoolArr
     col = np.round(x_local / pitch)
     via = (x_local - col * pitch) ** 2 + (ys - row * pitch) ** 2 <= via_r**2
 
-    return cast(BoolArray, horizontal | vertical | via)
+    return horizontal | vertical | via
 
 
 def _finfet_field(xs: FloatArray, ys: FloatArray, pattern: FinfetPattern) -> BoolArray:
@@ -163,7 +163,7 @@ def _disc_mask(xs: FloatArray, ys: FloatArray, disc: Disc) -> BoolArray:
     BoolArray
         ``True`` inside the circle.
     """
-    return cast(BoolArray, (xs - disc.x_nm) ** 2 + (ys - disc.y_nm) ** 2 <= disc.r_nm**2)
+    return (xs - disc.x_nm) ** 2 + (ys - disc.y_nm) ** 2 <= disc.r_nm**2
 
 
 def _rect_mask(xs: FloatArray, ys: FloatArray, rect: Rect) -> BoolArray:
@@ -184,7 +184,7 @@ def _rect_mask(xs: FloatArray, ys: FloatArray, rect: Rect) -> BoolArray:
         ``True`` inside the rectangle.
     """
     inside = (xs >= rect.x0_nm) & (xs <= rect.x1_nm) & (ys >= rect.y0_nm) & (ys <= rect.y1_nm)
-    return cast(BoolArray, inside)
+    return inside
 
 
 def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray:
@@ -211,7 +211,7 @@ def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray
         & (ys >= line.y0_nm)
         & (ys <= line.y1_nm)
     )
-    return cast(BoolArray, inside)
+    return inside
 
 
 # ===========================================================================

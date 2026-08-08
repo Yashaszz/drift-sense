@@ -18,7 +18,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import numpy as np
 from PIL import Image
@@ -108,7 +108,7 @@ def apply_sem_chain(
     ``src.sem_physics`` exists. Replacing this body requires no change here.
     """
     del px_nm, params, rng  # consumed by R2's implementation, not by the stub
-    return cast(FloatArray, image.copy())
+    return image.copy()
 
 
 # ===========================================================================
