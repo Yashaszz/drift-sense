@@ -27,6 +27,7 @@ only the noise seed. Varying both would be testing something the problem never
 asks of us.
 """
 
+import cv2
 import numpy as np
 import pytest
 from scipy.ndimage import gaussian_filter
@@ -135,6 +136,83 @@ def rescale_to_dtype(image: np.ndarray, dtype: np.dtype | type) -> np.ndarray:
     if np.issubdtype(np.dtype(dtype), np.integer):
         return (normalized * 200.0).astype(dtype)
     return normalized.astype(dtype)
+
+
+SCENE_SHAPE = (2000, 2000)
+SCENE_PITCH = 160
+PAIR_SCALE = 10.0
+REFERENCE_EDGE = 640
+PAIR_TRUE_COL = 800
+PAIR_TRUE_ROW = 600
+
+
+def make_two_scale_pair(
+    scale: float = PAIR_SCALE,
+    noise: float = 0.0,
+    search_psf_sigma: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
+    """Render one scene at two magnifications, the way the real instrument does.
+
+    Builds a single high-resolution scene, then produces the reference by
+    cropping it at full resolution and the search image by decimating the whole
+    scene. This is "one layout, two cameras" rather than "render then shrink":
+    it is how the physical captures actually relate, and it means the ground
+    truth is exact by construction rather than inferred.
+
+    Parameters
+    ----------
+    scale
+        Decimation ratio from scene to search grid.
+    noise
+        Standard deviation of noise added to the search capture only, modelling
+        the search image being the noisier of the two.
+    search_psf_sigma
+        Extra blur carried by the search optic, in *search* pixels, over and
+        above the band-limiting that sampling itself performs.
+
+        This must be non-zero for the pair to be realistic. The two images are
+        separate captures through different optics, so the search image is
+        blurrier than a mere decimation of the reference. A pair built by pure
+        area-averaging is degenerate: an unmatched template reproduces the
+        search content exactly and correlates at 1.0, which makes the whole
+        Stage 2 PSF step look pointless.
+
+        Applied at scene resolution, before decimation, because a physical PSF
+        band-limits the signal before the detector samples it.
+
+    Returns
+    -------
+    tuple
+        ``(reference, search, (true_col, true_row))`` where the true position is
+        the reference window's top-left corner in *search* pixels.
+    """
+    scene = make_periodic_field(shape=SCENE_SHAPE, pitch=SCENE_PITCH, structure_seed=77)
+
+    reference = crop(scene, PAIR_TRUE_COL, PAIR_TRUE_ROW, REFERENCE_EDGE)
+
+    captured = scene
+    if search_psf_sigma > 0.0:
+        captured = cv2.GaussianBlur(
+            scene,
+            ksize=(0, 0),
+            sigmaX=search_psf_sigma * scale,
+            sigmaY=search_psf_sigma * scale,
+            borderType=cv2.BORDER_REPLICATE,
+        )
+
+    out = (round(SCENE_SHAPE[0] / scale), round(SCENE_SHAPE[1] / scale))
+    search = cv2.resize(captured, (out[1], out[0]), interpolation=cv2.INTER_AREA)
+    if noise > 0.0:
+        search = search + np.random.default_rng(5).normal(0.0, noise, size=search.shape)
+
+    true_position = (round(PAIR_TRUE_COL / scale), round(PAIR_TRUE_ROW / scale))
+    return reference, np.ascontiguousarray(search, dtype=np.float32), true_position
+
+
+@pytest.fixture
+def two_scale_pair() -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
+    """Return a clean reference/search pair with exact ground truth."""
+    return make_two_scale_pair()
 
 
 @pytest.fixture

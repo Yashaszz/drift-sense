@@ -37,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src import config, matcher
+from src import config, matcher, pose
 from src.confidence import ConfidenceModel, is_low_confidence
 from src.types import (
     AnyArray,
@@ -50,6 +50,15 @@ from src.types import (
 )
 
 __all__ = ["localize", "main"]
+
+_MIN_POSE_QUALITY: float = 0.2
+"""Quality below which R2's pose estimate is discarded in favour of nominal.
+
+Pose error produces a position error that grows with distance from the image
+centre, so acting on an untrustworthy estimate is worse than ignoring it:
+assuming nominal is at least unbiased. Tuned against the pose-quality
+distribution once R2's estimator produces real values.
+"""
 
 
 class _NoCandidatesError(RuntimeError):
@@ -153,10 +162,38 @@ def _fallback_result(
 # ===========================================================================
 
 
+def _resolve_psf_sigma(search: FloatArray, mode: Mode) -> float:
+    """Choose the PSF width to build the template at.
+
+    Parameters
+    ----------
+    search
+        Search image as ``float32``.
+    mode
+        Resolved operating mode; never ``"auto"``.
+
+    Returns
+    -------
+    float
+        Target PSF width in search pixels.
+
+    Notes
+    -----
+    ``fast`` mode uses the documented default rather than measuring. Estimation
+    costs roughly 15 ms even on a bounded window, and on a periodic layout —
+    which is most of this problem — the estimator correctly declines and returns
+    that same default anyway. Paying for it on the cheap path buys nothing.
+    """
+    if mode == "fast":
+        return config.DEFAULT_PSF_SIGMA_PX
+    return matcher.estimate_psf_sigma(search)
+
+
 def _run_pipeline(
     search: FloatArray,
     reference: FloatArray,
-    pose: PoseEstimate,
+    pose_estimate: PoseEstimate,
+    psf_sigma: float,
     diagnostics: Diagnostics,
 ) -> tuple[float, float]:
     """Run Stages 2, 3, 3b and 5 for one pose hypothesis.
@@ -167,8 +204,10 @@ def _run_pipeline(
         Search image as ``float32``.
     reference
         Reference image as ``float32``.
-    pose
+    pose_estimate
         Rotation and scale hypothesis to build the template at.
+    psf_sigma
+        Target PSF width in search pixels, from :func:`_resolve_psf_sigma`.
     diagnostics
         Evidence record, updated in place.
 
@@ -186,11 +225,10 @@ def _run_pipeline(
         If the geometry is impossible, such as a template larger than the
         search image.
     """
-    psf_sigma = matcher.estimate_psf_sigma(search)
     template = matcher.build_template(
         reference,
-        theta=pose.theta_deg,
-        scale=pose.scale,
+        theta=pose_estimate.theta_deg,
+        scale=pose_estimate.scale,
         psf_sigma_px=psf_sigma,
     )
     surface = matcher.zncc_surface(template, search)
@@ -210,8 +248,8 @@ def _run_pipeline(
     best = peaks[0]
     diagnostics.ncc_peak = best.score
     diagnostics.n_tied = len(peaks)
-    diagnostics.theta_est = pose.theta_deg
-    diagnostics.scale_est = pose.scale
+    diagnostics.theta_est = pose_estimate.theta_deg
+    diagnostics.scale_est = pose_estimate.scale
 
     centre_x, centre_y = best.centre(template.shape)
     offset_x, offset_y = matcher.refine_subpixel(surface, best)
@@ -233,16 +271,33 @@ def _resolve_pose(search: FloatArray, reference: FloatArray, mode: Mode) -> Pose
     Returns
     -------
     PoseEstimate
-        Nominal pose in ``fast`` mode; R2's estimate otherwise.
+        Nominal pose in ``fast`` mode; R2's estimate otherwise, falling back to
+        nominal when that estimate is not trustworthy.
 
     Notes
     -----
-    ``src.pose.estimate_pose`` is R2's module and does not exist yet. Until it
-    lands, every mode uses the nominal pose, so rotated and rescaled cases
-    degrade in accuracy but nothing breaks. Wiring the real call is part of T6.
+    This is the seam with R2. The call is already wired, so when
+    :func:`src.pose.estimate_pose` gains a real body the pipeline picks it up
+    with no change here — the stub returns a nominal pose with zero quality,
+    which this function treats exactly as it would treat a genuine low-quality
+    estimate.
+
+    ``fast`` mode skips pose entirely and assumes nominal. That is the whole
+    source of its speed advantage, and it is why escalation exists: when the
+    detection statistic says the nominal assumption was wrong, the caller
+    re-runs in ``robust`` and pays for pose estimation only then.
+
+    A low-quality estimate is discarded rather than used. Pose error produces a
+    position error that *grows with distance from the image centre*, so a bad
+    estimate is worse than no estimate: assuming nominal is at least unbiased.
     """
-    del search, reference, mode
-    return PoseEstimate.nominal()
+    if mode == "fast":
+        return PoseEstimate.nominal()
+
+    estimate = pose.estimate_pose(reference, search, nominal_scale=config.NOMINAL_SCALE)
+    if estimate.quality < _MIN_POSE_QUALITY:
+        return PoseEstimate.nominal()
+    return estimate
 
 
 # ===========================================================================
@@ -296,8 +351,11 @@ def localize(
         resolved: Mode = "fast" if mode == "auto" else mode
         diagnostics.mode_used = resolved
 
-        pose = _resolve_pose(search_f, reference_f, resolved)
-        centre_x, centre_y = _run_pipeline(search_f, reference_f, pose, diagnostics)
+        pose_estimate = _resolve_pose(search_f, reference_f, resolved)
+        psf_sigma = _resolve_psf_sigma(search_f, resolved)
+        centre_x, centre_y = _run_pipeline(
+            search_f, reference_f, pose_estimate, psf_sigma, diagnostics
+        )
 
         model = ConfidenceModel.load_or_default(None)
         confidence = float(np.clip(model.predict(diagnostics), 0.0, 1.0))

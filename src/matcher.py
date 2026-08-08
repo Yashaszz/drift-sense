@@ -16,11 +16,10 @@ Stage 5 — subpixel refinement
 
 Status
 ------
-Stage 3 unmasked ZNCC is implemented (T2). Everything else is still a
-placeholder that returns a correctly typed and correctly *shaped* result, so the
-end-to-end pipeline runs and downstream modules can be written against it.
-Remaining work: T3 peak extraction, T4 template construction, T5 subpixel
-refinement, T8 masked ZNCC.
+Stages 2 (T4), 3 (T2) and 3b (T3) are implemented. Stage 5 subpixel refinement
+is still a placeholder returning a zero offset, and masked correlation is
+deferred to T8; both return correctly typed and correctly *shaped* results so
+the end-to-end pipeline runs and downstream modules can be written against them.
 
 Placeholder outputs are deliberately shape-correct rather than pass-through.
 Shape is the part of the contract that downstream code depends on — a
@@ -35,6 +34,28 @@ import numpy as np
 
 from src import config
 from src.types import AnyArray, BoolArray, FloatArray, Peak, Shape2D
+
+_MIN_PSF_SIGMA_PX: float = 0.1
+_MAX_PSF_SIGMA_PX: float = 5.0
+"""Bounds on the estimated PSF width, in search pixels.
+
+A width below ~0.1 px is indistinguishable from no blur at all, and one above
+~5 px would smear a 100 px template beyond usefulness. The spectral fit is
+confounded by the scene's own spectrum, so clamping hard is preferable to
+trusting an outlier.
+"""
+
+_SPECTRUM_BINS: int = 64
+_FIT_BAND: tuple[float, float] = (0.05, 0.35)
+_MIN_FIT_POINTS: int = 8
+_MIN_SPECTRUM_PIXELS: int = 64
+_MIN_FIT_R_SQUARED: float = 0.90
+_SPECTRUM_MAX_EDGE: int = 512
+"""Parameters of the radial power-spectrum fit.
+
+The band excludes the lowest frequencies, where the scene's own structure
+dominates, and the highest, where the noise floor flattens the rolloff.
+"""
 
 _FLAT_SURFACE_ATOL: float = 1e-12
 """Range below which a correlation surface is treated as carrying no peaks.
@@ -111,9 +132,190 @@ def estimate_psf_sigma(
     -----
     Never raises. An unreliable estimate degrades match quality; an exception
     would break the never-raises contract of :func:`src.localize.localize`.
+
+    This is a *coarse prior*, not a precise measurement. A Gaussian blur of
+    width sigma multiplies the power spectrum by ``exp(-4 pi^2 sigma^2 f^2)``, so
+    a straight-line fit of ``log P`` against ``f^2`` recovers sigma from the
+    slope. The confound is that the scene's own spectrum is not flat, and on a
+    strongly periodic layout it is dominated by lattice impulses rather than a
+    smooth rolloff. The fit is therefore restricted to a mid-frequency band and
+    the result is clamped hard.
+
+    The precise value is better obtained by scanning a few candidate widths and
+    keeping the one that maximises the correlation peak. That needs *both*
+    images, so it belongs in :func:`src.localize.localize` rather than here.
     """
-    del search, candidates  # placeholder: estimation lands in T4
-    return config.DEFAULT_PSF_SIGMA_PX
+    image = np.asarray(search, dtype=np.float32)
+    if image.ndim != 2 or image.size < _MIN_SPECTRUM_PIXELS or not np.all(np.isfinite(image)):
+        return _snap_to_candidates(config.DEFAULT_PSF_SIGMA_PX, candidates)
+
+    estimate = _sigma_from_spectrum(_centre_crop(image, _SPECTRUM_MAX_EDGE))
+    if estimate is None:
+        return _snap_to_candidates(config.DEFAULT_PSF_SIGMA_PX, candidates)
+
+    clamped = float(np.clip(estimate, _MIN_PSF_SIGMA_PX, _MAX_PSF_SIGMA_PX))
+    return _snap_to_candidates(clamped, candidates)
+
+
+def _centre_crop(image: FloatArray, max_edge: int) -> FloatArray:
+    """Take a centred window of at most ``max_edge`` on each side.
+
+    Parameters
+    ----------
+    image
+        Source image.
+    max_edge
+        Maximum edge length to retain.
+
+    Returns
+    -------
+    FloatArray
+        Centred crop, or the input unchanged when already small enough.
+
+    Notes
+    -----
+    The PSF estimate reads the *shape* of the spectral rolloff, which a
+    representative window captures as well as the whole frame. The full
+    transform of a 1000x1000 image costs around 60 ms — more than half the
+    entire Robust-mode budget — for no gain in an estimate that is deliberately
+    clamped and gated anyway.
+    """
+    rows, cols = image.shape
+    if rows <= max_edge and cols <= max_edge:
+        return image
+    keep_rows, keep_cols = min(rows, max_edge), min(cols, max_edge)
+    top = (rows - keep_rows) // 2
+    left = (cols - keep_cols) // 2
+    return np.ascontiguousarray(image[top : top + keep_rows, left : left + keep_cols])
+
+
+def _sigma_from_spectrum(image: FloatArray) -> float | None:
+    """Fit a Gaussian width from the radially averaged power spectrum.
+
+    Parameters
+    ----------
+    image
+        Two-dimensional image, finite valued.
+
+    Returns
+    -------
+    float or None
+        Estimated sigma in pixels of ``image``'s own grid, or ``None`` when the
+        spectrum does not support a fit.
+    """
+    rows, cols = image.shape
+    window = np.outer(np.hanning(rows), np.hanning(cols))
+    spectrum = np.fft.fftshift(np.abs(np.fft.fft2((image - image.mean()) * window)) ** 2)
+
+    freq_row = np.fft.fftshift(np.fft.fftfreq(rows))[:, None]
+    freq_col = np.fft.fftshift(np.fft.fftfreq(cols))[None, :]
+    radius = np.sqrt(freq_row**2 + freq_col**2)
+
+    bins = np.linspace(0.0, 0.5, _SPECTRUM_BINS + 1)
+    index = np.digitize(radius.ravel(), bins) - 1
+    valid = (index >= 0) & (index < _SPECTRUM_BINS)
+
+    totals = np.bincount(index[valid], weights=spectrum.ravel()[valid], minlength=_SPECTRUM_BINS)
+    counts = np.bincount(index[valid], minlength=_SPECTRUM_BINS)
+    occupied = counts > 0
+    if not np.any(occupied):
+        return None
+
+    centres = 0.5 * (bins[:-1] + bins[1:])
+    profile = np.zeros(_SPECTRUM_BINS, dtype=np.float64)
+    profile[occupied] = totals[occupied] / counts[occupied]
+
+    band = occupied & (centres >= _FIT_BAND[0]) & (centres <= _FIT_BAND[1]) & (profile > 0.0)
+    if int(np.count_nonzero(band)) < _MIN_FIT_POINTS:
+        return None
+
+    abscissa = centres[band] ** 2
+    ordinate = np.log(profile[band])
+    coefficients = np.polyfit(abscissa, ordinate, 1)
+    slope = float(coefficients[0])
+    if slope >= 0.0:
+        # Power rising with frequency: the fit is meaningless, usually because a
+        # lattice impulse dominates the band. Report no estimate rather than a
+        # confident wrong one.
+        return None
+
+    # Refuse a poorly-fitting line. On a strongly periodic layout the radial
+    # profile is a comb of lattice impulses rather than a smooth rolloff, and a
+    # least-squares line through it yields a confident, meaningless number.
+    # Measured separation is wide: a genuine Gaussian rolloff fits at R^2 above
+    # 0.95, whereas a lattice-dominated spectrum sits near 0.7. The same gate
+    # also rejects widths whose rolloff falls outside the fit band, where the
+    # estimate is unreliable for a different reason.
+    residuals = ordinate - np.polyval(coefficients, abscissa)
+    total_variance = float(np.var(ordinate))
+    if total_variance <= 0.0:
+        return None
+    if 1.0 - float(np.var(residuals)) / total_variance < _MIN_FIT_R_SQUARED:
+        return None
+
+    return float(np.sqrt(-slope / (4.0 * np.pi**2)))
+
+
+def _snap_to_candidates(sigma: float, candidates: Sequence[float] | None) -> float:
+    """Snap a continuous sigma estimate onto an allowed set.
+
+    Parameters
+    ----------
+    sigma
+        Continuous estimate in pixels.
+    candidates
+        Allowed values, or ``None`` to accept the estimate unchanged.
+
+    Returns
+    -------
+    float
+        The nearest candidate, or ``sigma`` when no candidates are supplied.
+    """
+    if not candidates:
+        return sigma
+    return min(candidates, key=lambda value: abs(value - sigma))
+
+
+def _reference_grid_sigma(target_sigma_search_px: float, scale: float) -> float:
+    """Convert a target PSF width in search pixels to the blur to apply before decimation.
+
+    Two conversions, and both matter.
+
+    The blur is applied on the *reference* grid but specified on the *search*
+    grid, so it scales up by ``scale``: a 1 px blur in the search image is a
+    10 px blur at 1 nm/px.
+
+    Area-average decimation is itself a low-pass. Averaging over a box of width
+    ``scale`` has variance ``scale^2 / 12``, so it contributes roughly
+    ``1/sqrt(12)`` of a search pixel of blur for free. Applying the full target
+    width on top of that would over-blur the template and cost correlation peak.
+    Since variances of independent Gaussians add, the width to apply is the
+    quadrature *difference*.
+
+    Parameters
+    ----------
+    target_sigma_search_px
+        Desired effective PSF width of the finished template, in search pixels.
+    scale
+        Decimation ratio.
+
+    Returns
+    -------
+    float
+        Sigma to apply on the reference grid, in reference pixels. Zero when the
+        decimation alone already exceeds the target width.
+
+    Notes
+    -----
+    The box-to-Gaussian equivalence is an approximation, as is treating
+    ``cv2.INTER_AREA`` at a non-integer ratio as a plain box. Both are second
+    order next to getting the ``scale`` factor right, which is the conversion
+    that would otherwise be wrong by 10x.
+    """
+    target_reference_px = target_sigma_search_px * scale
+    decimation_variance = (scale**2) / 12.0
+    residual_variance = target_reference_px**2 - decimation_variance
+    return float(np.sqrt(residual_variance)) if residual_variance > 0.0 else 0.0
 
 
 def match_psf(image: FloatArray, sigma_px: float) -> FloatArray:
@@ -131,9 +333,27 @@ def match_psf(image: FloatArray, sigma_px: float) -> FloatArray:
     -------
     FloatArray
         Blurred image, same shape as the input, ``float32``.
+
+    Notes
+    -----
+    Border handling replicates the edge rather than padding with zeros. A zero
+    pad would darken the template's rim and create a synthetic edge exactly
+    where the correlation is most sensitive to it.
     """
-    del sigma_px  # placeholder: Gaussian convolution lands in T4
-    return np.zeros_like(image, dtype=np.float32)
+    working = np.ascontiguousarray(image, dtype=np.float32)
+    if sigma_px <= 0.0:
+        return working
+    blurred: FloatArray = np.asarray(
+        cv2.GaussianBlur(
+            working,
+            ksize=(0, 0),  # derived from sigma
+            sigmaX=sigma_px,
+            sigmaY=sigma_px,
+            borderType=cv2.BORDER_REPLICATE,
+        ),
+        dtype=np.float32,
+    )
+    return blurred
 
 
 def area_average_downsample(image: FloatArray, factor: float) -> FloatArray:
@@ -170,9 +390,28 @@ def area_average_downsample(image: FloatArray, factor: float) -> FloatArray:
     if factor <= 0.0:
         msg = f"factor must be strictly positive, got {factor!r}"
         raise ValueError(msg)
-    rows, cols = image.shape
-    out_shape = (max(1, round(rows / factor)), max(1, round(cols / factor)))
-    return np.zeros(out_shape, dtype=np.float32)
+
+    working = np.ascontiguousarray(image, dtype=np.float32)
+    rows, cols = working.shape
+    out_rows = max(1, round(rows / factor))
+    out_cols = max(1, round(cols / factor))
+    if (out_rows, out_cols) == (rows, cols):
+        return working
+
+    # INTER_AREA is the area-average, and is only meaningful when shrinking; it
+    # degenerates to nearest-neighbour on enlargement. Enlargement is not a case
+    # we expect - the reference is always the finer grid - but the guard keeps
+    # the function honest if it is ever called that way.
+    interpolation = cv2.INTER_AREA if (out_rows <= rows and out_cols <= cols) else cv2.INTER_LINEAR
+    resized: FloatArray = np.asarray(
+        cv2.resize(
+            working,
+            dsize=(out_cols, out_rows),  # cv2 takes (width, height)
+            interpolation=interpolation,
+        ),
+        dtype=np.float32,
+    )
+    return resized
 
 
 def rotate_image(image: FloatArray, theta_deg: float) -> FloatArray:
@@ -196,9 +435,103 @@ def rotate_image(image: FloatArray, theta_deg: float) -> FloatArray:
         Rotated image, same shape as the input, ``float32``. Regions rotated in
         from outside the original frame are filled with the image mean, not
         zero, so the fill does not act as a synthetic edge feature.
+
+    Notes
+    -----
+    The rotation centre is ``((cols - 1) / 2, (rows - 1) / 2)``, which is the
+    geometric centre *in OpenCV's own indexing*, where pixel ``(i, j)`` sits at
+    coordinate ``(j, i)``. It is deliberately **not** taken from
+    :func:`src.config.image_centre`: that function encodes how we *report*
+    coordinates, which is still an open question with the organizers, whereas
+    this is a fact about how ``warpAffine`` addresses pixels. Wiring the two
+    together would turn a reporting-convention change into a half-pixel
+    resampling shift, which is precisely the class of bug the config module
+    exists to prevent.
+
+    Bilinear interpolation, not bicubic. The reference is oversampled tenfold
+    relative to the search grid, so everything bilinear attenuates lies above
+    the frequency that survives decimation anyway, and bilinear has no negative
+    lobes to ring with.
+
+    Shape is preserved, so the corners of the frame necessarily contain fill
+    after a rotation. :func:`build_template` crops that fill away rather than
+    correlating against it; this function stays shape-preserving because callers
+    and tests depend on it.
     """
-    del theta_deg  # placeholder: affine warp lands in T4
-    return np.zeros_like(image, dtype=np.float32)
+    working = np.ascontiguousarray(image, dtype=np.float32)
+    if theta_deg == 0.0:
+        return working
+
+    rows, cols = working.shape
+    centre = ((cols - 1) / 2.0, (rows - 1) / 2.0)
+    matrix = cv2.getRotationMatrix2D(centre, theta_deg, 1.0)
+    rotated: FloatArray = np.asarray(
+        cv2.warpAffine(
+            working,
+            matrix,
+            dsize=(cols, rows),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=float(working.mean()),
+        ),
+        dtype=np.float32,
+    )
+    return rotated
+
+
+def _crop_to_valid_rotation(image: FloatArray, theta_deg: float) -> FloatArray:
+    """Trim the border that a rotation filled with synthetic values.
+
+    After rotating a frame in place, the corners hold fill rather than data. At
+    5 degrees that is on the order of a sixth of the frame. Correlating against
+    it is strictly harmful: the fill is constant, so it contributes nothing to
+    the zero-mean numerator while still inflating the template's variance in the
+    denominator, which dilutes the correlation peak.
+
+    Parameters
+    ----------
+    image
+        Rotated image as ``(rows, cols)``.
+    theta_deg
+        The rotation that was applied, in degrees.
+
+    Returns
+    -------
+    FloatArray
+        Centred crop containing only real data. Returned unchanged when
+        ``theta_deg`` is zero.
+
+    Notes
+    -----
+    The same number of rows is removed from the top and the bottom, and the same
+    number of columns from each side, so the crop's centre coincides exactly
+    with the original's. That matters more than the size: an off-centre crop
+    would shift the reported match centre by half a pixel per unit of asymmetry,
+    which is a systematic error rather than a loss of information.
+
+    The retained fraction is ``1 / (|cos t| + |sin t|)``, the largest
+    axis-aligned square inscribed in a square rotated by ``t``. Applying the
+    same fraction to both axes is conservative for non-square inputs.
+    """
+    if theta_deg == 0.0:
+        return image
+
+    radians = np.deg2rad(abs(theta_deg) % 90.0)
+    retained = 1.0 / (abs(np.cos(radians)) + abs(np.sin(radians)))
+
+    rows, cols = image.shape
+    margin_rows = int(np.ceil(rows * (1.0 - retained) / 2.0))
+    margin_cols = int(np.ceil(cols * (1.0 - retained) / 2.0))
+
+    # Never crop away everything, however extreme the angle.
+    margin_rows = min(margin_rows, (rows - 1) // 2)
+    margin_cols = min(margin_cols, (cols - 1) // 2)
+    if margin_rows == 0 and margin_cols == 0:
+        return image
+
+    return np.ascontiguousarray(
+        image[margin_rows : rows - margin_rows, margin_cols : cols - margin_cols]
+    )
 
 
 def build_template(
@@ -229,15 +562,48 @@ def build_template(
     FloatArray
         Template, ``float32``, approximately
         ``config.TEMPLATE_NOMINAL_PX`` square. Callers must read the actual
-        shape rather than assuming it — the scale residual changes it.
+        shape rather than assuming it — both the scale residual and the
+        rotation crop change it.
 
     Raises
     ------
     ValueError
-        If ``scale`` is not strictly positive.
+        If ``scale`` is not strictly positive, or ``reference`` is not a finite
+        two-dimensional array.
+
+    Notes
+    -----
+    The order of the four steps is load-bearing.
+
+    1. **Rotate at full reference resolution.** The reference is oversampled
+       tenfold relative to the search grid, so resampling error here is far
+       below what survives decimation. Rotating afterwards would interpolate a
+       signal that has already lost the detail the rotation needs.
+    2. **Crop the rotation fill.** Only real data reaches the correlator.
+    3. **Match the PSF**, converting the target width from the search grid to
+       the reference grid and discounting the blur that decimation supplies for
+       free. See :func:`_reference_grid_sigma`.
+    4. **Decimate by area-averaging**, never by an interpolating kernel with
+       negative lobes.
+
+    Steps 3 and 4 cannot be swapped: blurring after decimation would apply the
+    low-pass to a signal that has already been aliased, which does not undo the
+    aliasing.
+
+    The template's centre corresponds exactly to the reference's centre. The
+    rotation is about the centre and the crop is symmetric, so no step
+    introduces a translation — which is what allows the match position to be
+    reported directly in search-image coordinates.
     """
-    del theta, psf_sigma_px  # placeholder: composition lands in T4
-    return area_average_downsample(reference, scale)
+    if scale <= 0.0:
+        msg = f"scale must be strictly positive, got {scale!r}"
+        raise ValueError(msg)
+
+    working = _as_working_array(reference, "reference")
+    rotated = rotate_image(working, theta)
+    cropped = _crop_to_valid_rotation(rotated, theta)
+    blurred = match_psf(cropped, _reference_grid_sigma(psf_sigma_px, scale))
+    return area_average_downsample(blurred, scale)
 
 
 # ===========================================================================
