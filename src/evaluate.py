@@ -41,28 +41,43 @@ from src.localize import localize
 # Ground-truth loading
 # --------------------------------------------------------------------------
 
-# R1's ground_truth.jsonl schema is not frozen in the contract, so accept the
-# plausible spellings rather than crashing on a name mismatch. First hit wins.
+# R1's ground_truth.jsonl nests coordinates under "ground_truth" and stratum
+# labels under "strata". Paths below are dotted; plain names are top-level.
+# First hit wins, so alternate spellings can be appended without reordering.
 _KEY_ALIASES: dict[str, tuple[str, ...]] = {
-    "case_id": ("case_id", "pair_id", "id", "name"),
-    "arch": ("arch", "architecture", "layout", "device"),
-    "anchored": ("anchored", "anchor_state", "has_anchor"),
-    "pose": ("pose", "pose_condition", "pose_case"),
+    "case_id": ("pair_id", "case_id", "id"),
+    "arch": ("strata.architecture", "architecture", "arch"),
+    "anchored": ("strata.anchor", "anchored", "anchor_state"),
+    "pose": ("strata.pose_condition", "pose_condition", "pose"),
+    "noise": ("strata.noise_level", "noise_level"),
     "seed": ("seed", "rng_seed"),
-    "gt_x": ("x", "gt_x", "center_x", "centre_x", "cx"),
-    "gt_y": ("y", "gt_y", "center_y", "centre_y", "cy"),
-    "ref_path": ("ref_path", "reference_path", "ref", "reference", "ref_image"),
-    "search_path": ("search_path", "search", "search_image", "wide_path"),
+    "gt_x": ("ground_truth.x", "gt_x", "x"),
+    "gt_y": ("ground_truth.y", "gt_y", "y"),
+    "gt_rotation_deg": ("ground_truth.rotation_deg", "rotation_deg"),
+    "gt_scale": ("ground_truth.scale", "scale"),
+    "ref_path": ("reference_path", "ref_path", "reference"),
+    "search_path": ("search_path", "search"),
 }
 
 _REQUIRED = ("gt_x", "gt_y", "ref_path", "search_path")
 
 
 def _pick(record: dict[str, Any], field: str) -> Any:
-    """Return the first alias of ``field`` present in ``record``, else None."""
+    """Return the first alias of ``field`` found in ``record``, else None.
+
+    Aliases containing dots are walked as nested keys, so ``ground_truth.x``
+    reads ``record["ground_truth"]["x"]``. A missing or non-dict level is
+    treated as a miss rather than an error, letting the next alias be tried.
+    """
     for alias in _KEY_ALIASES[field]:
-        if alias in record:
-            return record[alias]
+        cursor: Any = record
+        for part in alias.split("."):
+            if not isinstance(cursor, dict) or part not in cursor:
+                cursor = None
+                break
+            cursor = cursor[part]
+        if cursor is not None:
+            return cursor
     return None
 
 
@@ -130,6 +145,7 @@ COLUMNS = [
     "arch",
     "anchored",
     "pose",
+    "noise",
     "seed",
     "gt_x",
     "gt_y",
@@ -137,6 +153,10 @@ COLUMNS = [
     "pred_y",
     "err_px",
     "success_1px",
+    "gt_rotation_deg",
+    "gt_scale",
+    "theta_err_deg",
+    "scale_err",
     "confidence",
     "low_confidence_flag",
     "ncc_peak",
@@ -161,6 +181,20 @@ def _diag(diagnostics: Any, field: str) -> Any:
     return getattr(diagnostics, field, float("nan"))
 
 
+def _signed_gap(estimate: Any, truth: Any) -> float:
+    """Return ``estimate - truth`` as a float, or NaN if either is unusable.
+
+    Signed rather than absolute: a pose stage that is consistently biased in one
+    direction is a different bug from one that is merely noisy, and averaging
+    absolute values hides that distinction.
+    """
+    try:
+        gap = float(estimate) - float(truth)
+    except (TypeError, ValueError):
+        return float("nan")
+    return gap if math.isfinite(gap) else float("nan")
+
+
 def run_case(
     case: dict[str, Any], data_dir: Path, mode: str = "auto"
 ) -> dict[str, Any]:
@@ -177,9 +211,12 @@ def run_case(
             "arch": case["arch"],
             "anchored": case["anchored"],
             "pose": case["pose"],
+            "noise": case["noise"],
             "seed": case["seed"],
             "gt_x": case["gt_x"],
             "gt_y": case["gt_y"],
+            "gt_rotation_deg": case["gt_rotation_deg"],
+            "gt_scale": case["gt_scale"],
         }
     )
 
@@ -202,12 +239,19 @@ def run_case(
     err = math.hypot(result.x - float(case["gt_x"]), result.y - float(case["gt_y"]))
     diagnostics = getattr(result, "diagnostics", None)
 
+    # R1 records true rotation and scale alongside the centre, so the pose
+    # stages can be scored directly instead of inferred from position error.
+    theta_err = _signed_gap(_diag(diagnostics, "theta_est"), case["gt_rotation_deg"])
+    scale_err = _signed_gap(_diag(diagnostics, "scale_est"), case["gt_scale"])
+
     row.update(
         {
             "pred_x": result.x,
             "pred_y": result.y,
             "err_px": err,
             "success_1px": int(err <= 1.0),
+            "theta_err_deg": theta_err,
+            "scale_err": scale_err,
             "confidence": result.confidence,
             "low_confidence_flag": int(bool(result.low_confidence_flag)),
             "ncc_peak": _diag(diagnostics, "ncc_peak"),
@@ -364,7 +408,7 @@ def main() -> None:
 
     overall = sum(int(r["success_1px"]) for r in scored) / len(scored)
     print(f"\nOVERALL success@1px: {overall:.3f}  ({len(scored)} cases)")
-    for column in ("arch", "anchored", "pose"):
+    for column in ("arch", "anchored", "pose", "noise"):
         if any(r[column] not in ("", None) for r in scored):
             print_table(f"By {column}", summarise(scored, column))
 
