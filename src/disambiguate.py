@@ -110,9 +110,10 @@ def peak_to_sidelobe(
     Returns
     -------
     float
-        Peak-to-sidelobe ratio. Larger means less ambiguous. Returns ``0.0``
-        when the sidelobe region is empty or has zero variance, which is the
-        conservative answer: no evidence of a distinctive peak.
+        Peak-to-sidelobe ratio. Larger means less ambiguous. Returns
+        ``float("nan")`` when the sidelobe region is empty or has zero
+        variance, signalling an absent measurement rather than a poor
+        one. R4's escalation logic treats NaN as unknown and escalates.
 
     Notes
     -----
@@ -121,8 +122,22 @@ def peak_to_sidelobe(
     it for the peak-ratio test. It lives here, in R3's module, so there is one
     implementation rather than two that drift apart.
     """
-    del surface, peak, exclusion_radius  # stub: detection statistic is R3's work
-    return 0.0
+    peak_value = float(surface[peak.row, peak.col])
+
+    rows, cols = np.ogrid[: surface.shape[0], : surface.shape[1]]
+    sq_dist = (rows - peak.row) ** 2 + (cols - peak.col) ** 2
+    sidelobe = surface[sq_dist > exclusion_radius**2]
+
+    if sidelobe.size == 0:
+        return float("nan")
+
+    sidelobe_mean = float(np.nanmean(sidelobe))
+    sidelobe_std = float(np.nanstd(sidelobe))
+
+    if not np.isfinite(sidelobe_std) or sidelobe_std == 0.0:
+        return float("nan")
+
+    return float((peak_value - sidelobe_mean) / sidelobe_std)
 
 
 def select_candidate(
@@ -161,8 +176,22 @@ def select_candidate(
         If ``peaks`` is empty. Callers must handle an empty shortlist before
         reaching here; there is no sensible candidate to invent.
     """
-    del image_centre, tolerance  # stub: tie-break logic is R3's work
     if not peaks:
         msg = "select_candidate requires at least one candidate peak"
         raise ValueError(msg)
-    return (peaks[0], False)
+
+    best_score = max(p.score for p in peaks)
+    tied = [p for p in peaks if best_score - p.score <= tolerance]
+
+    if len(tied) == 1:
+        return (tied[0], False)
+
+    # Distances compared in raw (col, row). The top-left -> centre offset is
+    # the same constant for every peak (one template), so it shifts all
+    # candidates equally and cannot change which is nearest to the centre.
+    centre_x, centre_y = image_centre
+    nearest = min(
+        tied,
+        key=lambda p: ((p.col - centre_x) ** 2 + (p.row - centre_y) ** 2, p.row, p.col),
+    )
+    return (nearest, True)
