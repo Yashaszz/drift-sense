@@ -38,7 +38,7 @@ from scipy.ndimage import map_coordinates
 
 from src import config
 from src.layouts import Disc, DramPattern, FinfetPattern, Layout, Pattern, Rect, VerticalLine
-from src.types import BoolArray, FloatArray
+from src.types import BoolArray, Float64Array, FloatArray
 
 __all__ = [
     "GroundTruth",
@@ -148,7 +148,7 @@ def _pattern_field(xs: FloatArray, ys: FloatArray, pattern: Pattern) -> BoolArra
     return _finfet_field(xs, ys, pattern)
 
 
-def _cumulative_band_length(x: FloatArray, pitch: float, width: float) -> FloatArray:
+def _cumulative_band_length(x: Float64Array, pitch: float, width: float) -> Float64Array:
     """Total band length in ``(-inf, x]`` for bands centred on multiples of pitch.
 
     Parameters
@@ -170,11 +170,11 @@ def _cumulative_band_length(x: FloatArray, pitch: float, width: float) -> FloatA
     n = np.floor(values / pitch)
     u = values - n * pitch
     within = np.minimum(u, half) + np.maximum(0.0, u - (pitch - half))
-    return (n * width + within).astype(np.float64)
+    return cast(Float64Array, n * width + within)
 
 
 def _band_coverage(
-    edges: FloatArray, pitch: float, width: float, offset: float = 0.0
+    edges: Float64Array, pitch: float, width: float, offset: float = 0.0
 ) -> FloatArray:
     """Exact fraction of each cell covered by a periodic band pattern.
 
@@ -207,10 +207,10 @@ def _band_coverage(
     shifted = np.asarray(edges, dtype=np.float64) - offset
     cumulative = _cumulative_band_length(shifted, pitch, clipped)
     covered = (cumulative[1:] - cumulative[:-1]) / (shifted[1:] - shifted[:-1])
-    return np.clip(covered, 0.0, 1.0).astype(np.float32)
+    return cast(FloatArray, np.clip(covered, 0.0, 1.0).astype(np.float32))
 
 
-def _bulk_coverage(edges_x: FloatArray, edges_y: FloatArray, pattern: Pattern) -> FloatArray:
+def _bulk_coverage(edges_x: Float64Array, edges_y: Float64Array, pattern: Pattern) -> FloatArray:
     """Exact coverage of the straight-line part of a pattern.
 
     Parameters
@@ -247,7 +247,7 @@ def _bulk_coverage(edges_x: FloatArray, edges_y: FloatArray, pattern: Pattern) -
         )
     col = cx[None, :]
     row = cy[:, None]
-    return (col + row - col * row).astype(np.float32)
+    return cast(FloatArray, (col + row - col * row).astype(np.float32))
 
 
 def _via_field(xs: FloatArray, ys: FloatArray, pattern: DramPattern) -> BoolArray:
