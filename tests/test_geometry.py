@@ -213,7 +213,7 @@ def test_rendered_images_are_normalised():
     for image in (reference, search):
         assert image.shape == (SMALL, SMALL)
         assert image.dtype == np.float32
-        assert 0.0 <= float(image.min()) and float(image.max()) <= 1.0
+        assert float(image.min()) >= 0.0 and float(image.max()) <= 1.0
 
 
 def test_validate_record_rejects_out_of_bounds_ground_truth():
