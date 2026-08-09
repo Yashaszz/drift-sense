@@ -271,6 +271,6 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
-
-# The generator writes here by default (see --output-dir).
 dataset/
+dataset_full/
+dataset_incomplete_105/
