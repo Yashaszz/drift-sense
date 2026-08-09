@@ -243,6 +243,7 @@ def test_validate_record_rejects_out_of_bounds_ground_truth():
     with pytest.raises(ValueError, match="outside the search image"):
         validate_record(broken)
 
+
 @pytest.mark.parametrize("pitch_nm", [70.0, 80.0, 90.0, 100.0, 110.0])
 def test_commensurate_pitch_still_antialiases(pitch_nm):
     """A lattice whose pitch is a whole number of pixels must still anti-alias.

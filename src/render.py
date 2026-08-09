@@ -148,7 +148,6 @@ def _pattern_field(xs: FloatArray, ys: FloatArray, pattern: Pattern) -> BoolArra
     return _finfet_field(xs, ys, pattern)
 
 
-
 def _cumulative_band_length(x: FloatArray, pitch: float, width: float) -> FloatArray:
     """Total band length in ``(-inf, x]`` for bands centred on multiples of pitch.
 
@@ -241,7 +240,9 @@ def _bulk_coverage(edges_x: FloatArray, edges_y: FloatArray, pattern: Pattern) -
     else:
         cx = _band_coverage(edges_x, pattern.fin_pitch_nm, pattern.fin_width_nm)
         cy = _band_coverage(
-            edges_y, pattern.gate_pitch_nm, pattern.gate_width_nm,
+            edges_y,
+            pattern.gate_pitch_nm,
+            pattern.gate_width_nm,
             offset=pattern.gate_pitch_nm / 2.0,
         )
     col = cx[None, :]
