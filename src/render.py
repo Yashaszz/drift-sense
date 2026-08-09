@@ -15,7 +15,9 @@ interpolation ringing enters the geometry.
 **Area-averaged downsampling.** Each output pixel is the mean of a
 ``supersample x supersample`` block of the binary membership field. A real SEM
 pixel integrates signal over its area; bicubic or Lanczos would inject ringing
-that physics does not produce.
+that physics does not produce. The zero-rotation path shears its sample grid so
+that a lattice commensurate with the pixel grid still anti-aliases -- see
+:func:`rasterize`.
 
 Ground-truth coordinates
 ------------------------
@@ -146,6 +148,133 @@ def _pattern_field(xs: FloatArray, ys: FloatArray, pattern: Pattern) -> BoolArra
     return _finfet_field(xs, ys, pattern)
 
 
+
+def _cumulative_band_length(x: FloatArray, pitch: float, width: float) -> FloatArray:
+    """Total band length in ``(-inf, x]`` for bands centred on multiples of pitch.
+
+    Parameters
+    ----------
+    x
+        Positions in nanometres.
+    pitch
+        Band period.
+    width
+        Band width.
+
+    Returns
+    -------
+    FloatArray
+        Cumulative covered length at each position.
+    """
+    half = width / 2.0
+    values = np.asarray(x, dtype=np.float64)
+    n = np.floor(values / pitch)
+    u = values - n * pitch
+    within = np.minimum(u, half) + np.maximum(0.0, u - (pitch - half))
+    return (n * width + within).astype(np.float64)
+
+
+def _band_coverage(
+    edges: FloatArray, pitch: float, width: float, offset: float = 0.0
+) -> FloatArray:
+    """Exact fraction of each cell covered by a periodic band pattern.
+
+    Parameters
+    ----------
+    edges
+        Cell boundaries in nanometres, length ``n + 1`` for ``n`` cells.
+    pitch
+        Band period.
+    width
+        Band width.
+    offset
+        Position of the first band centre. Defaults to zero.
+
+    Returns
+    -------
+    FloatArray
+        Covered fraction per cell, in ``[0, 1]``, length ``n``.
+
+    Notes
+    -----
+    Closed form, so it is exact regardless of how the pitch relates to the pixel
+    grid. Point sampling cannot manage that: when the pitch is a whole number of
+    pixels every pixel sees the same sub-pixel phase, and the rendered linewidth
+    comes out up to 11% wide.
+    """
+    if width <= 0.0 or pitch <= 0.0:
+        return np.zeros(len(edges) - 1, dtype=np.float32)
+    clipped = min(width, pitch)
+    shifted = np.asarray(edges, dtype=np.float64) - offset
+    cumulative = _cumulative_band_length(shifted, pitch, clipped)
+    covered = (cumulative[1:] - cumulative[:-1]) / (shifted[1:] - shifted[:-1])
+    return np.clip(covered, 0.0, 1.0).astype(np.float32)
+
+
+def _bulk_coverage(edges_x: FloatArray, edges_y: FloatArray, pattern: Pattern) -> FloatArray:
+    """Exact coverage of the straight-line part of a pattern.
+
+    Parameters
+    ----------
+    edges_x
+        Column boundaries in nanometres.
+    edges_y
+        Row boundaries in nanometres.
+    pattern
+        Either supported architecture.
+
+    Returns
+    -------
+    FloatArray
+        Coverage per pixel, shape ``(len(edges_y) - 1, len(edges_x) - 1)``.
+
+    Notes
+    -----
+    Vertical and horizontal bands are independent within a pixel -- one spans
+    the full height of its sub-column, the other the full width of its sub-row
+    -- so the union area is exactly ``cx + cy - cx * cy``. DRAM vias are not
+    covered here; they are handled by sampling, being circles.
+    """
+    if isinstance(pattern, DramPattern):
+        cx = _band_coverage(edges_x, pattern.pitch_nm, pattern.line_width_nm)
+        cy = _band_coverage(edges_y, pattern.pitch_nm, pattern.line_width_nm)
+    else:
+        cx = _band_coverage(edges_x, pattern.fin_pitch_nm, pattern.fin_width_nm)
+        cy = _band_coverage(
+            edges_y, pattern.gate_pitch_nm, pattern.gate_width_nm,
+            offset=pattern.gate_pitch_nm / 2.0,
+        )
+    col = cx[None, :]
+    row = cy[:, None]
+    return (col + row - col * row).astype(np.float32)
+
+
+def _via_field(xs: FloatArray, ys: FloatArray, pattern: DramPattern) -> BoolArray:
+    """Membership of the DRAM contact vias only.
+
+    Parameters
+    ----------
+    xs
+        Column-axis coordinates in nanometres.
+    ys
+        Row-axis coordinates in nanometres.
+    pattern
+        DRAM lattice description.
+
+    Returns
+    -------
+    BoolArray
+        ``True`` inside a via.
+    """
+    pitch = np.float32(pattern.pitch_nm)
+    via_r = np.float32(pattern.via_nm / 2.0)
+    row = np.round(ys / pitch)
+    offset = np.where(np.mod(row, 2) != 0, pitch / 2.0, 0.0) if pattern.staggered else 0.0
+    x_local = xs - offset
+    col = np.round(x_local / pitch)
+    return (x_local - col * pitch) ** 2 + (ys - row * pitch) ** 2 <= via_r**2
+
+
 def _disc_mask(xs: FloatArray, ys: FloatArray, disc: Disc) -> BoolArray:
     """Return the membership mask of a filled circle.
 
@@ -183,7 +312,8 @@ def _rect_mask(xs: FloatArray, ys: FloatArray, rect: Rect) -> BoolArray:
     BoolArray
         ``True`` inside the rectangle.
     """
-    return (xs >= rect.x0_nm) & (xs <= rect.x1_nm) & (ys >= rect.y0_nm) & (ys <= rect.y1_nm)
+    inside = (xs >= rect.x0_nm) & (xs <= rect.x1_nm) & (ys >= rect.y0_nm) & (ys <= rect.y1_nm)
+    return inside
 
 
 def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray:
@@ -204,12 +334,13 @@ def _vline_mask(xs: FloatArray, ys: FloatArray, line: VerticalLine) -> BoolArray
         ``True`` inside the bar.
     """
     half = line.width_nm / 2.0
-    return (
+    inside = (
         (xs >= line.x_nm - half)
         & (xs <= line.x_nm + half)
         & (ys >= line.y0_nm)
         & (ys <= line.y1_nm)
     )
+    return inside
 
 
 # ===========================================================================
@@ -300,7 +431,24 @@ def rasterize(
         xs = (centre_x + (cos_t * dx_nm - sin_t * dy_nm)).astype(np.float32)
         ys = (centre_y + (sin_t * dx_nm + cos_t * dy_nm)).astype(np.float32)
 
-    field = _pattern_field(xs, ys, layout.pattern).astype(np.float32)
+    if abs(rotation_deg) < 1e-9:
+        # Exact coverage for the straight bands, sampling only for the vias.
+        # Point sampling alone cannot render a lattice whose pitch is a whole
+        # number of pixels: every pixel then sees the same sub-pixel phase, so
+        # there are no partial coverages to average and the linewidth comes out
+        # up to 11% wide.
+        cell = np.arange(out_size + 1, dtype=np.float64) - out_size / 2.0
+        edges_x = centre_x + cell * float(nm_per_px)
+        edges_y = centre_y + cell * float(nm_per_px)
+        field_px = _bulk_coverage(edges_x, edges_y, layout.pattern)
+        if isinstance(layout.pattern, DramPattern):
+            vias = _via_field(xs, ys, layout.pattern).astype(np.float32)
+            blocks = vias.reshape(out_size, supersample, out_size, supersample)
+            via_px = blocks.mean(axis=(1, 3))
+            field_px = np.maximum(field_px, via_px)
+        field = np.repeat(np.repeat(field_px, supersample, axis=0), supersample, axis=1)
+    else:
+        field = _pattern_field(xs, ys, layout.pattern).astype(np.float32)
     for erase in layout.erase:
         mask = _disc_mask(xs, ys, erase) if isinstance(erase, Disc) else _rect_mask(xs, ys, erase)
         field = np.where(mask, np.float32(0.0), field)
