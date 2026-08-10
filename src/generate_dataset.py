@@ -49,7 +49,7 @@ __all__ = [
 MANIFEST_NAME: str = "dataset_manifest.json"
 """Filename of the manifest written alongside the images."""
 
-MANIFEST_SCHEMA_VERSION: int = 1
+MANIFEST_SCHEMA_VERSION: int = 2
 """Bumped when the manifest gains or loses a field."""
 
 DEFAULT_SEED: int = 20260807
@@ -552,7 +552,7 @@ def build_dataset(
 
 
 def image_tree_hash(output_dir: Path) -> str:
-    """Return one fingerprint covering every PNG in a dataset.
+    """Return one fingerprint over the *pixel content* of every PNG.
 
     Parameters
     ----------
@@ -562,15 +562,49 @@ def image_tree_hash(output_dir: Path) -> str:
     Returns
     -------
     str
-        Hex SHA-256 over ``"<file digest>  <relative path>"`` lines, sorted by
-        path.
+        Hex SHA-256 over ``"<pixel digest>  <shape>  <relative path>"`` lines,
+        sorted by path.
 
     Notes
     -----
+    Decoded pixels, not file bytes. Two machines can encode identical images
+    into different PNG files -- compression level, zlib build, Pillow version --
+    and a byte-level hash then reports a difference that does not exist. That is
+    not hypothetical: it made a Linux and a macOS checkout of the same commit
+    look like different datasets.
+
     Paths are relative to ``output_dir``, so the value does not depend on where
-    the dataset happens to live or what ``--output-dir`` was called. Whole-tree
-    rather than per-file: the question worth answering is "do we hold the same
-    data", and one value answers it.
+    the dataset lives or what ``--output-dir`` was called.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(output_dir.rglob("*.png")):
+        relative = path.relative_to(output_dir).as_posix()
+        with Image.open(path) as handle:
+            pixels = np.asarray(handle)
+        pixel_digest = hashlib.sha256(pixels.tobytes()).hexdigest()
+        digest.update(f"{pixel_digest}  {pixels.shape}{pixels.dtype}  {relative}\n".encode())
+    return digest.hexdigest()
+
+
+def file_tree_hash(output_dir: Path) -> str:
+    """Return one fingerprint over the encoded PNG bytes.
+
+    Parameters
+    ----------
+    output_dir
+        Dataset root.
+
+    Returns
+    -------
+    str
+        Hex SHA-256 over ``"<file digest>  <relative path>"`` lines.
+
+    Notes
+    -----
+    Recorded alongside :func:`image_tree_hash` purely so a mismatch is
+    diagnosable. Same pixels with different file hashes means the encoders
+    differ and the data is fine; different pixel hashes means the data really
+    does differ.
     """
     digest = hashlib.sha256()
     for path in sorted(output_dir.rglob("*.png")):
@@ -680,6 +714,7 @@ def write_manifest(
         "expected_pair_count": expected_pair_count(seeds_per_cell),
         "image_count": len(records) * 2,
         "image_tree_sha256": image_tree_hash(output_dir),
+        "file_tree_sha256": file_tree_hash(output_dir),
         "generator_commit": _generator_commit(),
         "generation": {
             "seeds_per_cell": seeds_per_cell,
@@ -748,6 +783,38 @@ def verify_dataset(output_dir: Path) -> dict[str, Any]:
         )
         raise ValueError(msg)
     return manifest
+
+
+def compare_manifests(mine: dict[str, Any], theirs: dict[str, Any]) -> str:
+    """Explain how two datasets differ, in one line.
+
+    Parameters
+    ----------
+    mine
+        A manifest.
+    theirs
+        Another manifest to compare against.
+
+    Returns
+    -------
+    str
+        Human-readable verdict.
+
+    Notes
+    -----
+    Separating the pixel hash from the file hash turns "our hashes differ" from
+    an unanswerable question into a diagnosis: same pixels and different files
+    is a harmless encoder difference, different pixels is a real one.
+    """
+    if mine["pair_count"] != theirs["pair_count"]:
+        return f"different sizes: {mine['pair_count']} vs {theirs['pair_count']} pairs"
+    if mine["generator_commit"] != theirs["generator_commit"]:
+        return f"different code: {mine['generator_commit']} vs {theirs['generator_commit']}"
+    if mine["image_tree_sha256"] != theirs["image_tree_sha256"]:
+        return "PIXELS DIFFER -- same code and size, so this is a real divergence"
+    if mine.get("file_tree_sha256") != theirs.get("file_tree_sha256"):
+        return "identical pixels, different PNG encoding -- harmless, the data matches"
+    return "identical"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
