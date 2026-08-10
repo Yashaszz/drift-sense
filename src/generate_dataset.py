@@ -47,23 +47,90 @@ OUT_SIZE: int = 1000
 
 POSE_RANGES: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
     "none": ((0.0, 0.0), (1.0, 1.0)),
-    "small": ((-3.0, 3.0), (0.98, 1.02)),
+    "small": ((-5.0, 5.0), (0.97, 1.03)),
     "large": ((-8.0, 8.0), (0.95, 1.05)),
 }
-"""Rotation and scale-mismatch ranges per pose stratum."""
+"""Rotation and scale-mismatch ranges per pose stratum.
+
+``small`` is the Phase-2 baseline from the work-split document: rotation +-5 deg,
+scale +-3%. ``large`` deliberately exceeds it, so the dataset carries stress
+cases beyond the range anyone is tuning against.
+"""
+
+NOISE_LEVELS: tuple[str, ...] = ("none",)
+"""Noise strata generated.
+
+Currently one inert level, because :func:`apply_sem_chain` is a passthrough
+until ``src.sem_physics`` lands. Change to ``("low", "medium", "high")`` in the
+same commit that wires R2's module in -- the stratification loop and the record
+schema already handle it, and :data:`NOISE_SCALING` holds the intended mapping.
+Generating three identical noise strata before the physics is real would put a
+column in R3's per-stratum table that cannot differ, which is worse than a
+column that is honestly absent.
+"""
+
+NOISE_SCALING: dict[str, dict[str, float]] = {
+    "low": {"dose": 2.0, "read_noise": 0.5},
+    "medium": {"dose": 1.0, "read_noise": 1.0},
+    "high": {"dose": 0.35, "read_noise": 2.0},
+}
+"""Provisional multipliers on R2's preset dose and read-noise sigma.
+
+``medium`` is R2's preset unchanged. Dose drives shot noise, so halving it
+raises noise as the square root; read-noise sigma is additive and scales
+directly. **Not yet confirmed with R2** -- they shipped two captures presets
+(reference/search) rather than three severity levels, so this mapping is R1's
+proposal pending their answer.
+"""
+
+
+def _tolerance_range(nominal_nm: float, fraction: float) -> tuple[float, float]:
+    """Return a symmetric randomisation range around a nominal dimension.
+
+    Parameters
+    ----------
+    nominal_nm
+        Centre of the range, in nanometres.
+    fraction
+        Half-width as a fraction of nominal, e.g. ``0.20`` for +-20%.
+
+    Returns
+    -------
+    tuple of float
+        ``(low, high)`` in nanometres.
+    """
+    return (nominal_nm * (1.0 - fraction), nominal_nm * (1.0 + fraction))
+
+
+DRAM_NOMINAL_NM: dict[str, float] = {"pitch_nm": 180.0, "line_width_nm": 40.0, "via_nm": 60.0}
+"""Nominal DRAM dimensions the randomisation is centred on."""
+
+FINFET_NOMINAL_NM: dict[str, float] = {
+    "fin_pitch_nm": 90.0,
+    "fin_width_nm": 24.0,
+    "gate_width_nm": 13.0,
+    "gate_pitch_nm": 420.0,
+}
+"""Nominal FinFET dimensions the randomisation is centred on."""
+
+PITCH_TOLERANCE: float = 0.20
+"""Pitch randomisation, +-20% of nominal, per the work-split document."""
+
+WIDTH_TOLERANCE: float = 0.15
+"""Linewidth randomisation, +-15% of nominal, per the work-split document."""
 
 DRAM_RANGES: dict[str, tuple[float, float]] = {
-    "pitch_nm": (150.0, 220.0),
-    "line_width_nm": (30.0, 50.0),
-    "via_nm": (45.0, 70.0),
+    "pitch_nm": _tolerance_range(DRAM_NOMINAL_NM["pitch_nm"], PITCH_TOLERANCE),
+    "line_width_nm": _tolerance_range(DRAM_NOMINAL_NM["line_width_nm"], WIDTH_TOLERANCE),
+    "via_nm": _tolerance_range(DRAM_NOMINAL_NM["via_nm"], WIDTH_TOLERANCE),
 }
 """Domain-randomisation ranges for DRAM, in nanometres."""
 
 FINFET_RANGES: dict[str, tuple[float, float]] = {
-    "fin_pitch_nm": (70.0, 110.0),
-    "fin_width_nm": (18.0, 30.0),
-    "gate_width_nm": (10.0, 16.0),
-    "gate_pitch_nm": (340.0, 520.0),
+    "fin_pitch_nm": _tolerance_range(FINFET_NOMINAL_NM["fin_pitch_nm"], PITCH_TOLERANCE),
+    "fin_width_nm": _tolerance_range(FINFET_NOMINAL_NM["fin_width_nm"], WIDTH_TOLERANCE),
+    "gate_width_nm": _tolerance_range(FINFET_NOMINAL_NM["gate_width_nm"], WIDTH_TOLERANCE),
+    "gate_pitch_nm": _tolerance_range(FINFET_NOMINAL_NM["gate_pitch_nm"], PITCH_TOLERANCE),
 }
 """Domain-randomisation ranges for FinFET, in nanometres."""
 
@@ -319,7 +386,7 @@ def _save_png(image: FloatArray, path: Path) -> None:
 def build_dataset(
     output_dir: Path,
     *,
-    seeds_per_cell: int = 3,
+    seeds_per_cell: int = 9,
     base_seed: int = DEFAULT_SEED,
     out_size: int = OUT_SIZE,
     supersample: int = DEFAULT_SUPERSAMPLE,
@@ -331,8 +398,9 @@ def build_dataset(
     output_dir
         Dataset root. ``reference/`` and ``search/`` are created inside it.
     seeds_per_cell
-        Pairs per stratification cell. Twelve cells, so the total is twelve
-        times this.
+        Pairs per stratification cell. Cells are
+        ``architecture x anchor x pose x noise``, so the total is
+        ``2 * 2 * 3 * len(NOISE_LEVELS) * seeds_per_cell``.
     base_seed
         Base seed; pair ``i`` uses ``base_seed + i``.
     out_size
@@ -345,6 +413,16 @@ def build_dataset(
     tuple
         ``(records, elapsed_seconds, ground_truth_path)``.
     """
+    # Clear before writing. Leaving old files behind silently mixes runs: a
+    # smaller --seeds-per-cell overwrites the pairs it regenerates and orphans
+    # the rest, so the folder ends up holding two datasets at once and its
+    # checksum matches neither.
+    if output_dir.exists():
+        for stale in sorted(output_dir.rglob("*.png")):
+            stale.unlink()
+        stale_gt = output_dir / "ground_truth.jsonl"
+        if stale_gt.exists():
+            stale_gt.unlink()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "reference").mkdir(exist_ok=True)
     (output_dir / "search").mkdir(exist_ok=True)
@@ -357,63 +435,63 @@ def build_dataset(
         for anchored in (True, False):
             for pose in ("none", "small", "large"):
                 rotation_range, scale_range = POSE_RANGES[pose]
-                for _ in range(seeds_per_cell):
-                    seed = base_seed + index
-                    rng = np.random.default_rng(seed)
-                    rotation = float(rng.uniform(*rotation_range))
-                    scale_mismatch = float(rng.uniform(*scale_range))
+                for noise_level in NOISE_LEVELS:
+                    for _ in range(seeds_per_cell):
+                        seed = base_seed + index
+                        rng = np.random.default_rng(seed)
+                        rotation = float(rng.uniform(*rotation_range))
+                        scale_mismatch = float(rng.uniform(*scale_range))
 
-                    plan = plan_pair(
-                        rng,
-                        extent_nm=EXTENT_NM,
-                        out_size=out_size,
-                        rotation_deg=rotation,
-                        scale_mismatch=scale_mismatch,
-                    )
-                    layout = _sample_layout(
-                        architecture,
-                        rng,
-                        anchored=anchored,
-                        anchor_centre_nm=plan.crop_centre_nm,
-                    )
-                    reference, search = render_pair(
-                        layout, plan, out_size=out_size, supersample=supersample
-                    )
+                        plan = plan_pair(
+                            rng,
+                            extent_nm=EXTENT_NM,
+                            out_size=out_size,
+                            rotation_deg=rotation,
+                            scale_mismatch=scale_mismatch,
+                        )
+                        layout = _sample_layout(
+                            architecture,
+                            rng,
+                            anchored=anchored,
+                            anchor_centre_nm=plan.crop_centre_nm,
+                        )
+                        reference, search = render_pair(
+                            layout, plan, out_size=out_size, supersample=supersample
+                        )
 
-                    noise_level = "none"
-                    reference = apply_sem_chain(
-                        reference, config.REF_PX_NM, {"noise_level": noise_level}, rng
-                    )
-                    search = apply_sem_chain(
-                        search, plan.search_px_nm, {"noise_level": noise_level}, rng
-                    )
+                        reference = apply_sem_chain(
+                            reference, config.REF_PX_NM, {"noise_level": noise_level}, rng
+                        )
+                        search = apply_sem_chain(
+                            search, plan.search_px_nm, {"noise_level": noise_level}, rng
+                        )
 
-                    tag = "anchored" if anchored else "unanchored"
-                    pair_id = f"{architecture}_{tag}_pose-{pose}_{index:04d}"
-                    reference_path = Path("reference") / f"{pair_id}.png"
-                    search_path = Path("search") / f"{pair_id}.png"
-                    _save_png(reference, output_dir / reference_path)
-                    _save_png(search, output_dir / search_path)
+                        tag = "anchored" if anchored else "unanchored"
+                        pair_id = f"{architecture}_{tag}_pose-{pose}_{index:04d}"
+                        reference_path = Path("reference") / f"{pair_id}.png"
+                        search_path = Path("search") / f"{pair_id}.png"
+                        _save_png(reference, output_dir / reference_path)
+                        _save_png(search, output_dir / search_path)
 
-                    record = PairRecord(
-                        pair_id=pair_id,
-                        reference_path=reference_path.as_posix(),
-                        search_path=search_path.as_posix(),
-                        ground_truth=plan.ground_truth,
-                        plan=plan,
-                        layout=layout,
-                        strata={
-                            "architecture": architecture,
-                            "anchor": tag,
-                            "noise_level": noise_level,
-                            "pose_condition": pose,
-                        },
-                        seed=seed,
-                        anchors_in_reference=count_anchors_in_reference(layout, plan, out_size),
-                    )
-                    validate_record(record, out_size)
-                    records.append(record)
-                    index += 1
+                        record = PairRecord(
+                            pair_id=pair_id,
+                            reference_path=reference_path.as_posix(),
+                            search_path=search_path.as_posix(),
+                            ground_truth=plan.ground_truth,
+                            plan=plan,
+                            layout=layout,
+                            strata={
+                                "architecture": architecture,
+                                "anchor": tag,
+                                "noise_level": noise_level,
+                                "pose_condition": pose,
+                            },
+                            seed=seed,
+                            anchors_in_reference=count_anchors_in_reference(layout, plan, out_size),
+                        )
+                        validate_record(record, out_size)
+                        records.append(record)
+                        index += 1
 
     gt_path = output_dir / "ground_truth.jsonl"
     with gt_path.open("w", encoding="utf-8") as handle:
@@ -441,7 +519,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Generate the Drift-Sense stratified synthetic dataset.",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("dataset"))
-    parser.add_argument("--seeds-per-cell", type=int, default=3)
+    parser.add_argument("--seeds-per-cell", type=int, default=9)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--supersample", type=int, default=DEFAULT_SUPERSAMPLE)
     args = parser.parse_args(argv)

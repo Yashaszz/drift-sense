@@ -9,7 +9,11 @@ import pytest
 
 from src import config
 from src.generate_dataset import (
+    DRAM_RANGES,
     EXTENT_NM,
+    FINFET_RANGES,
+    NOISE_LEVELS,
+    POSE_RANGES,
     _sample_layout,
     count_anchors_in_reference,
     validate_record,
@@ -318,3 +322,53 @@ def test_tiling_does_not_change_the_image(rotation_deg, supersample):
         ]
     )
     assert np.array_equal(whole, strips)
+
+
+def test_randomisation_matches_the_documented_tolerances():
+    """Layout ranges must match the tolerances the work-split document states.
+
+    The generator is 30% of the project score and every dimension in it needs a
+    citation, so the ranges are derived from a nominal value and a stated
+    tolerance rather than typed in as magic bounds. This pins that derivation.
+    """
+    for ranges, keys, tolerance in (
+        (DRAM_RANGES, ["pitch_nm"], 0.20),
+        (DRAM_RANGES, ["line_width_nm", "via_nm"], 0.15),
+        (FINFET_RANGES, ["fin_pitch_nm", "gate_pitch_nm"], 0.20),
+        (FINFET_RANGES, ["fin_width_nm", "gate_width_nm"], 0.15),
+    ):
+        for key in keys:
+            low, high = ranges[key]
+            nominal = (low + high) / 2.0
+            assert (high - low) / (2.0 * nominal) == pytest.approx(tolerance, abs=1e-9)
+
+
+def test_pose_baseline_matches_the_brief():
+    """``small`` is the documented baseline; ``large`` must exceed it."""
+    (small_rot_lo, small_rot_hi), (small_scale_lo, small_scale_hi) = POSE_RANGES["small"]
+    assert (small_rot_lo, small_rot_hi) == (-5.0, 5.0)
+    assert small_scale_lo == pytest.approx(0.97)
+    assert small_scale_hi == pytest.approx(1.03)
+
+    (large_rot_lo, large_rot_hi), _ = POSE_RANGES["large"]
+    assert large_rot_hi > small_rot_hi
+    assert large_rot_lo < small_rot_lo
+
+
+def test_noise_strata_are_not_faked():
+    """Only emit noise levels the physics can actually produce.
+
+    ``apply_sem_chain`` is a passthrough until R2's module lands, so generating
+    low/medium/high now would give R3 a stratum column that cannot differ --
+    worse than an honestly absent one. This fails the moment someone adds levels
+    without wiring the physics.
+    """
+    from src.generate_dataset import apply_sem_chain
+
+    rng = np.random.default_rng(0)
+    image = rng.random((16, 16)).astype(np.float32)
+    passthrough = np.array_equal(apply_sem_chain(image, 10.0, {}, rng), image)
+    if passthrough:
+        assert NOISE_LEVELS == ("none",)
+    else:
+        assert set(NOISE_LEVELS) >= {"low", "medium", "high"}
