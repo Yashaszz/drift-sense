@@ -17,6 +17,7 @@ from src.generate_dataset import (
 from src.layouts import generate_dram_layout, generate_finfet_layout
 from src.render import (
     GroundTruth,
+    _render_rows,
     plan_pair,
     raster_centre_base,
     rasterize,
@@ -277,3 +278,43 @@ def test_zero_rotation_matches_rotated_linewidth():
         layout, (6000.0, 6000.0), config.SEARCH_PX_NM, SMALL, rotation_deg=5.0, supersample=4
     )
     assert abs(float(flat.mean()) - float(tilted.mean())) < 0.02
+
+
+@pytest.mark.parametrize("rotation_deg", [0.0, 5.0])
+@pytest.mark.parametrize("supersample", [2, 4])
+def test_tiling_does_not_change_the_image(rotation_deg, supersample):
+    """Rendering in strips must be bit-identical to rendering in one pass.
+
+    Tiling exists to bound peak memory -- rendering a 1000 px image at
+    supersample 4 in one pass allocates roughly a gigabyte, enough to have
+    Windows tear down the WSL VM mid-run and leave a partial dataset behind.
+    It is only safe because each output pixel depends solely on its own
+    supersample block, so this test pins that property.
+    """
+    layout = generate_dram_layout(
+        EXTENT_NM, 187.3, 40.0, 60.0, _rng(1), anchored=True, anchor_centre_nm=(6000.0, 6000.0)
+    )
+    whole = rasterize(
+        layout,
+        (6000.0, 6000.0),
+        config.SEARCH_PX_NM,
+        SMALL,
+        rotation_deg=rotation_deg,
+        supersample=supersample,
+    )
+    strips = np.concatenate(
+        [
+            _render_rows(
+                layout,
+                (6000.0, 6000.0),
+                config.SEARCH_PX_NM,
+                SMALL,
+                first,
+                min(first + 37, SMALL),
+                rotation_deg=rotation_deg,
+                supersample=supersample,
+            )
+            for first in range(0, SMALL, 37)
+        ]
+    )
+    assert np.array_equal(whole, strips)

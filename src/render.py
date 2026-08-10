@@ -53,6 +53,9 @@ __all__ = [
 DEFAULT_SUPERSAMPLE: int = 4
 """Anti-aliasing factor. Each output pixel averages this many samples per axis."""
 
+DEFAULT_TILE_ROWS: int = 64
+"""Output rows rendered per tile. Bounds peak memory; does not change output."""
+
 DEFAULT_EDGE_PAD_PX: float = 8.0
 """Extra clearance kept between the reference footprint and the search border."""
 
@@ -412,21 +415,91 @@ def rasterize(
         )
         raise ValueError(msg)
 
+    rendered = np.empty((out_size, out_size), dtype=np.float32)
+    rows = max(1, min(out_size, DEFAULT_TILE_ROWS))
+    for first in range(0, out_size, rows):
+        last = min(first + rows, out_size)
+        rendered[first:last] = _render_rows(
+            layout,
+            centre_nm,
+            nm_per_px,
+            out_size,
+            first,
+            last,
+            rotation_deg=rotation_deg,
+            supersample=supersample,
+        )
+    return rendered
+
+
+def _render_rows(
+    layout: Layout,
+    centre_nm: tuple[float, float],
+    nm_per_px: float,
+    out_size: int,
+    first_row: int,
+    last_row: int,
+    *,
+    rotation_deg: float,
+    supersample: int,
+) -> FloatArray:
+    """Render one horizontal strip of the output image.
+
+    Parameters
+    ----------
+    layout
+        Continuous description of the die region.
+    centre_nm
+        Window centre as ``(x, y)`` in nanometres.
+    nm_per_px
+        Physical sampling pitch of the output image.
+    out_size
+        Edge length of the full square output image, in pixels.
+    first_row
+        First output row of this strip, inclusive.
+    last_row
+        Last output row of this strip, exclusive.
+    rotation_deg
+        Window rotation, positive counter-clockwise.
+    supersample
+        Anti-aliasing factor per axis.
+
+    Returns
+    -------
+    FloatArray
+        Strip of shape ``(last_row - first_row, out_size)``.
+
+    Notes
+    -----
+    Rendering the whole image at once allocates several supersampled arrays of
+    ``out_size * supersample`` per side -- around a gigabyte at 1000 px and
+    ``supersample=4``, which was enough to have Windows tear down the WSL VM
+    mid-run and leave a partial dataset behind. Strips make peak memory
+    independent of image size, and the output is bit-identical because each
+    output pixel depends only on its own supersample block.
+    """
     centre_x, centre_y = centre_nm
-    n = out_size * supersample
-    offsets = ((np.arange(n, dtype=np.float32) + 0.5) / supersample - out_size / 2.0).astype(
+    height = last_row - first_row
+    strip = height * supersample
+    width = out_size * supersample
+
+    columns = ((np.arange(width, dtype=np.float32) + 0.5) / supersample - out_size / 2.0).astype(
         np.float32
     )
+    row_index = np.arange(first_row * supersample, last_row * supersample, dtype=np.float32)
+    rows_offset = ((row_index + 0.5) / supersample - out_size / 2.0).astype(np.float32)
     pitch = np.float32(nm_per_px)
 
     if abs(rotation_deg) < 1e-9:
-        xs = (centre_x + offsets * pitch)[None, :].repeat(n, axis=0).astype(np.float32)
-        ys = (centre_y + offsets * pitch)[:, None].repeat(n, axis=1).astype(np.float32)
+        xs = np.broadcast_to(centre_x + columns * pitch, (strip, width)).astype(np.float32)
+        ys = np.broadcast_to((centre_y + rows_offset * pitch)[:, None], (strip, width)).astype(
+            np.float32
+        )
     else:
         theta = np.deg2rad(rotation_deg)
         cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
-        dx_px, dy_px = np.meshgrid(offsets, offsets)
-        dx_nm, dy_nm = dx_px * pitch, dy_px * pitch
+        dx_nm = (columns * pitch)[None, :]
+        dy_nm = (rows_offset * pitch)[:, None]
         xs = (centre_x + (cos_t * dx_nm - sin_t * dy_nm)).astype(np.float32)
         ys = (centre_y + (sin_t * dx_nm + cos_t * dy_nm)).astype(np.float32)
 
@@ -436,18 +509,19 @@ def rasterize(
         # number of pixels: every pixel then sees the same sub-pixel phase, so
         # there are no partial coverages to average and the linewidth comes out
         # up to 11% wide.
-        cell = np.arange(out_size + 1, dtype=np.float64) - out_size / 2.0
-        edges_x = centre_x + cell * float(nm_per_px)
-        edges_y = centre_y + cell * float(nm_per_px)
+        cell_x = np.arange(out_size + 1, dtype=np.float64) - out_size / 2.0
+        cell_y = np.arange(first_row, last_row + 1, dtype=np.float64) - out_size / 2.0
+        edges_x = centre_x + cell_x * float(nm_per_px)
+        edges_y = centre_y + cell_y * float(nm_per_px)
         field_px = _bulk_coverage(edges_x, edges_y, layout.pattern)
         if isinstance(layout.pattern, DramPattern):
             vias = _via_field(xs, ys, layout.pattern).astype(np.float32)
-            blocks = vias.reshape(out_size, supersample, out_size, supersample)
-            via_px = blocks.mean(axis=(1, 3))
+            via_px = vias.reshape(height, supersample, out_size, supersample).mean(axis=(1, 3))
             field_px = np.maximum(field_px, via_px)
         field = np.repeat(np.repeat(field_px, supersample, axis=0), supersample, axis=1)
     else:
         field = _pattern_field(xs, ys, layout.pattern).astype(np.float32)
+
     for erase in layout.erase:
         mask = _disc_mask(xs, ys, erase) if isinstance(erase, Disc) else _rect_mask(xs, ys, erase)
         field = np.where(mask, np.float32(0.0), field)
@@ -459,7 +533,7 @@ def rasterize(
         )
         field = np.maximum(field, mask.astype(np.float32))
 
-    blocks = field.reshape(out_size, supersample, out_size, supersample)
+    blocks = field.reshape(height, supersample, out_size, supersample)
     return cast(FloatArray, blocks.mean(axis=(1, 3)).astype(np.float32))
 
 
