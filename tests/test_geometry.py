@@ -12,11 +12,17 @@ from src.generate_dataset import (
     DRAM_RANGES,
     EXTENT_NM,
     FINFET_RANGES,
+    MANIFEST_NAME,
     NOISE_LEVELS,
+    OUT_SIZE,
     POSE_RANGES,
     _sample_layout,
+    build_dataset,
     count_anchors_in_reference,
+    expected_pair_count,
+    image_tree_hash,
     validate_record,
+    verify_dataset,
 )
 from src.layouts import generate_dram_layout, generate_finfet_layout
 from src.render import (
@@ -372,3 +378,68 @@ def test_noise_strata_are_not_faked():
         assert NOISE_LEVELS == ("none",)
     else:
         assert set(NOISE_LEVELS) >= {"low", "medium", "high"}
+
+
+# ---------------------------------------------------------------------------
+# Manifest
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tiny_dataset(tmp_path):
+    """Generate the smallest complete dataset, for manifest tests."""
+    build_dataset(tmp_path, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
+    return tmp_path
+
+
+def test_manifest_describes_the_dataset(tiny_dataset):
+    """The manifest is the only link from a results file back to its data.
+
+    ``dataset/`` is gitignored, so nothing else records which images a number
+    was measured on or which commit produced them.
+    """
+    import json
+
+    manifest = json.loads((tiny_dataset / MANIFEST_NAME).read_text())
+    assert manifest["pair_count"] == expected_pair_count(1)
+    assert manifest["image_count"] == manifest["pair_count"] * 2
+    assert len(manifest["image_tree_sha256"]) == 64
+    assert manifest["generation"]["seeds_per_cell"] == 1
+    assert manifest["strata_counts"]["architecture"] == {"dram": 6, "finfet": 6}
+
+
+def test_verify_accepts_an_untouched_dataset(tiny_dataset):
+    """A clean dataset must verify."""
+    assert verify_dataset(tiny_dataset)["pair_count"] == expected_pair_count(1)
+
+
+def test_verify_catches_a_truncated_dataset(tiny_dataset):
+    """Missing images must fail loudly.
+
+    A generation run killed partway leaves a folder that looks fine -- the
+    process is killed rather than raising, so there is no traceback and no
+    obvious sign. That cost the team a day of chasing checksum mismatches.
+    """
+    next(iter((tiny_dataset / "reference").glob("*.png"))).unlink()
+    with pytest.raises(ValueError, match="image count mismatch"):
+        verify_dataset(tiny_dataset)
+
+
+def test_verify_catches_a_single_changed_pixel(tiny_dataset):
+    """Any pixel drift must fail: a stale copy does not announce itself."""
+    from PIL import Image
+
+    path = next(iter((tiny_dataset / "reference").glob("*.png")))
+    pixels = np.asarray(Image.open(path)).copy()
+    pixels[0, 0] = np.uint8((int(pixels[0, 0]) + 1) % 256)
+    Image.fromarray(pixels).save(path)
+    with pytest.raises(ValueError, match="image tree has drifted"):
+        verify_dataset(tiny_dataset)
+
+
+def test_image_tree_hash_ignores_the_dataset_location(tmp_path):
+    """The fingerprint must not depend on where the dataset happens to live."""
+    first, second = tmp_path / "one", tmp_path / "somewhere" / "two"
+    build_dataset(first, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
+    build_dataset(second, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
+    assert image_tree_hash(first) == image_tree_hash(second)
