@@ -22,7 +22,6 @@ from src.types import Diagnostics, Peak
 # ---------------------------------------------------------------------------
 
 
-
 def test_r3_tie_break_bug():
     """The mandated rule picks the candidate whose *centre* is nearest.
 
