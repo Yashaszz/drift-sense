@@ -36,7 +36,7 @@ def test_clear_winner_no_tie_break() -> None:
         Peak(col=10, row=10, score=0.9),
         Peak(col=80, row=80, score=0.3),
     ]
-    chosen, tie_break_used = select_candidate(peaks, (50.0, 50.0), 0.05)
+    chosen, tie_break_used = select_candidate(peaks, (50.0, 50.0), (10, 10), 0.05)
     assert chosen.col == 10
     assert tie_break_used is False
 
@@ -49,6 +49,6 @@ def test_tied_peaks_go_to_centre() -> None:
         Peak(col=52, row=52, score=0.79),
         Peak(col=10, row=10, score=0.80),
     ]
-    chosen, tie_break_used = select_candidate(peaks, (50.0, 50.0), 0.05)
+    chosen, tie_break_used = select_candidate(peaks, (50.0, 50.0), (10, 10), 0.05)
     assert (chosen.col, chosen.row) == (52, 52)
     assert tie_break_used is True
