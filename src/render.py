@@ -15,7 +15,9 @@ interpolation ringing enters the geometry.
 **Area-averaged downsampling.** Each output pixel is the mean of a
 ``supersample x supersample`` block of the binary membership field. A real SEM
 pixel integrates signal over its area; bicubic or Lanczos would inject ringing
-that physics does not produce.
+that physics does not produce. The zero-rotation path shears its sample grid so
+that a lattice commensurate with the pixel grid still anti-aliases -- see
+:func:`rasterize`.
 
 Ground-truth coordinates
 ------------------------
@@ -36,7 +38,7 @@ from scipy.ndimage import map_coordinates
 
 from src import config
 from src.layouts import Disc, DramPattern, FinfetPattern, Layout, Pattern, Rect, VerticalLine
-from src.types import BoolArray, FloatArray
+from src.types import BoolArray, Float64Array, FloatArray
 
 __all__ = [
     "GroundTruth",
@@ -50,6 +52,9 @@ __all__ = [
 
 DEFAULT_SUPERSAMPLE: int = 4
 """Anti-aliasing factor. Each output pixel averages this many samples per axis."""
+
+DEFAULT_TILE_ROWS: int = 64
+"""Output rows rendered per tile. Bounds peak memory; does not change output."""
 
 DEFAULT_EDGE_PAD_PX: float = 8.0
 """Extra clearance kept between the reference footprint and the search border."""
@@ -144,6 +149,134 @@ def _pattern_field(xs: FloatArray, ys: FloatArray, pattern: Pattern) -> BoolArra
     if isinstance(pattern, DramPattern):
         return _dram_field(xs, ys, pattern)
     return _finfet_field(xs, ys, pattern)
+
+
+def _cumulative_band_length(x: Float64Array, pitch: float, width: float) -> Float64Array:
+    """Total band length in ``(-inf, x]`` for bands centred on multiples of pitch.
+
+    Parameters
+    ----------
+    x
+        Positions in nanometres.
+    pitch
+        Band period.
+    width
+        Band width.
+
+    Returns
+    -------
+    FloatArray
+        Cumulative covered length at each position.
+    """
+    half = width / 2.0
+    values = np.asarray(x, dtype=np.float64)
+    n = np.floor(values / pitch)
+    u = values - n * pitch
+    within = np.minimum(u, half) + np.maximum(0.0, u - (pitch - half))
+    return cast(Float64Array, n * width + within)
+
+
+def _band_coverage(
+    edges: Float64Array, pitch: float, width: float, offset: float = 0.0
+) -> FloatArray:
+    """Exact fraction of each cell covered by a periodic band pattern.
+
+    Parameters
+    ----------
+    edges
+        Cell boundaries in nanometres, length ``n + 1`` for ``n`` cells.
+    pitch
+        Band period.
+    width
+        Band width.
+    offset
+        Position of the first band centre. Defaults to zero.
+
+    Returns
+    -------
+    FloatArray
+        Covered fraction per cell, in ``[0, 1]``, length ``n``.
+
+    Notes
+    -----
+    Closed form, so it is exact regardless of how the pitch relates to the pixel
+    grid. Point sampling cannot manage that: when the pitch is a whole number of
+    pixels every pixel sees the same sub-pixel phase, and the rendered linewidth
+    comes out up to 11% wide.
+    """
+    if width <= 0.0 or pitch <= 0.0:
+        return np.zeros(len(edges) - 1, dtype=np.float32)
+    clipped = min(width, pitch)
+    shifted = np.asarray(edges, dtype=np.float64) - offset
+    cumulative = _cumulative_band_length(shifted, pitch, clipped)
+    covered = (cumulative[1:] - cumulative[:-1]) / (shifted[1:] - shifted[:-1])
+    return cast(FloatArray, np.clip(covered, 0.0, 1.0).astype(np.float32))
+
+
+def _bulk_coverage(edges_x: Float64Array, edges_y: Float64Array, pattern: Pattern) -> FloatArray:
+    """Exact coverage of the straight-line part of a pattern.
+
+    Parameters
+    ----------
+    edges_x
+        Column boundaries in nanometres.
+    edges_y
+        Row boundaries in nanometres.
+    pattern
+        Either supported architecture.
+
+    Returns
+    -------
+    FloatArray
+        Coverage per pixel, shape ``(len(edges_y) - 1, len(edges_x) - 1)``.
+
+    Notes
+    -----
+    Vertical and horizontal bands are independent within a pixel -- one spans
+    the full height of its sub-column, the other the full width of its sub-row
+    -- so the union area is exactly ``cx + cy - cx * cy``. DRAM vias are not
+    covered here; they are handled by sampling, being circles.
+    """
+    if isinstance(pattern, DramPattern):
+        cx = _band_coverage(edges_x, pattern.pitch_nm, pattern.line_width_nm)
+        cy = _band_coverage(edges_y, pattern.pitch_nm, pattern.line_width_nm)
+    else:
+        cx = _band_coverage(edges_x, pattern.fin_pitch_nm, pattern.fin_width_nm)
+        cy = _band_coverage(
+            edges_y,
+            pattern.gate_pitch_nm,
+            pattern.gate_width_nm,
+            offset=pattern.gate_pitch_nm / 2.0,
+        )
+    col = cx[None, :]
+    row = cy[:, None]
+    return cast(FloatArray, (col + row - col * row).astype(np.float32))
+
+
+def _via_field(xs: FloatArray, ys: FloatArray, pattern: DramPattern) -> BoolArray:
+    """Membership of the DRAM contact vias only.
+
+    Parameters
+    ----------
+    xs
+        Column-axis coordinates in nanometres.
+    ys
+        Row-axis coordinates in nanometres.
+    pattern
+        DRAM lattice description.
+
+    Returns
+    -------
+    BoolArray
+        ``True`` inside a via.
+    """
+    pitch = np.float32(pattern.pitch_nm)
+    via_r = np.float32(pattern.via_nm / 2.0)
+    row = np.round(ys / pitch)
+    offset = np.where(np.mod(row, 2) != 0, pitch / 2.0, 0.0) if pattern.staggered else 0.0
+    x_local = xs - offset
+    col = np.round(x_local / pitch)
+    return (x_local - col * pitch) ** 2 + (ys - row * pitch) ** 2 <= via_r**2
 
 
 def _disc_mask(xs: FloatArray, ys: FloatArray, disc: Disc) -> BoolArray:
@@ -282,25 +415,113 @@ def rasterize(
         )
         raise ValueError(msg)
 
+    rendered = np.empty((out_size, out_size), dtype=np.float32)
+    rows = max(1, min(out_size, DEFAULT_TILE_ROWS))
+    for first in range(0, out_size, rows):
+        last = min(first + rows, out_size)
+        rendered[first:last] = _render_rows(
+            layout,
+            centre_nm,
+            nm_per_px,
+            out_size,
+            first,
+            last,
+            rotation_deg=rotation_deg,
+            supersample=supersample,
+        )
+    return rendered
+
+
+def _render_rows(
+    layout: Layout,
+    centre_nm: tuple[float, float],
+    nm_per_px: float,
+    out_size: int,
+    first_row: int,
+    last_row: int,
+    *,
+    rotation_deg: float,
+    supersample: int,
+) -> FloatArray:
+    """Render one horizontal strip of the output image.
+
+    Parameters
+    ----------
+    layout
+        Continuous description of the die region.
+    centre_nm
+        Window centre as ``(x, y)`` in nanometres.
+    nm_per_px
+        Physical sampling pitch of the output image.
+    out_size
+        Edge length of the full square output image, in pixels.
+    first_row
+        First output row of this strip, inclusive.
+    last_row
+        Last output row of this strip, exclusive.
+    rotation_deg
+        Window rotation, positive counter-clockwise.
+    supersample
+        Anti-aliasing factor per axis.
+
+    Returns
+    -------
+    FloatArray
+        Strip of shape ``(last_row - first_row, out_size)``.
+
+    Notes
+    -----
+    Rendering the whole image at once allocates several supersampled arrays of
+    ``out_size * supersample`` per side -- around a gigabyte at 1000 px and
+    ``supersample=4``, which was enough to have Windows tear down the WSL VM
+    mid-run and leave a partial dataset behind. Strips make peak memory
+    independent of image size, and the output is bit-identical because each
+    output pixel depends only on its own supersample block.
+    """
     centre_x, centre_y = centre_nm
-    n = out_size * supersample
-    offsets = ((np.arange(n, dtype=np.float32) + 0.5) / supersample - out_size / 2.0).astype(
+    height = last_row - first_row
+    strip = height * supersample
+    width = out_size * supersample
+
+    columns = ((np.arange(width, dtype=np.float32) + 0.5) / supersample - out_size / 2.0).astype(
         np.float32
     )
+    row_index = np.arange(first_row * supersample, last_row * supersample, dtype=np.float32)
+    rows_offset = ((row_index + 0.5) / supersample - out_size / 2.0).astype(np.float32)
     pitch = np.float32(nm_per_px)
 
     if abs(rotation_deg) < 1e-9:
-        xs = (centre_x + offsets * pitch)[None, :].repeat(n, axis=0).astype(np.float32)
-        ys = (centre_y + offsets * pitch)[:, None].repeat(n, axis=1).astype(np.float32)
+        xs = np.broadcast_to(centre_x + columns * pitch, (strip, width)).astype(np.float32)
+        ys = np.broadcast_to((centre_y + rows_offset * pitch)[:, None], (strip, width)).astype(
+            np.float32
+        )
     else:
         theta = np.deg2rad(rotation_deg)
         cos_t, sin_t = np.float32(np.cos(theta)), np.float32(np.sin(theta))
-        dx_px, dy_px = np.meshgrid(offsets, offsets)
-        dx_nm, dy_nm = dx_px * pitch, dy_px * pitch
+        dx_nm = (columns * pitch)[None, :]
+        dy_nm = (rows_offset * pitch)[:, None]
         xs = (centre_x + (cos_t * dx_nm - sin_t * dy_nm)).astype(np.float32)
         ys = (centre_y + (sin_t * dx_nm + cos_t * dy_nm)).astype(np.float32)
 
-    field = _pattern_field(xs, ys, layout.pattern).astype(np.float32)
+    if abs(rotation_deg) < 1e-9:
+        # Exact coverage for the straight bands, sampling only for the vias.
+        # Point sampling alone cannot render a lattice whose pitch is a whole
+        # number of pixels: every pixel then sees the same sub-pixel phase, so
+        # there are no partial coverages to average and the linewidth comes out
+        # up to 11% wide.
+        cell_x = np.arange(out_size + 1, dtype=np.float64) - out_size / 2.0
+        cell_y = np.arange(first_row, last_row + 1, dtype=np.float64) - out_size / 2.0
+        edges_x = centre_x + cell_x * float(nm_per_px)
+        edges_y = centre_y + cell_y * float(nm_per_px)
+        field_px = _bulk_coverage(edges_x, edges_y, layout.pattern)
+        if isinstance(layout.pattern, DramPattern):
+            vias = _via_field(xs, ys, layout.pattern).astype(np.float32)
+            via_px = vias.reshape(height, supersample, out_size, supersample).mean(axis=(1, 3))
+            field_px = np.maximum(field_px, via_px)
+        field = np.repeat(np.repeat(field_px, supersample, axis=0), supersample, axis=1)
+    else:
+        field = _pattern_field(xs, ys, layout.pattern).astype(np.float32)
+
     for erase in layout.erase:
         mask = _disc_mask(xs, ys, erase) if isinstance(erase, Disc) else _rect_mask(xs, ys, erase)
         field = np.where(mask, np.float32(0.0), field)
@@ -312,7 +533,7 @@ def rasterize(
         )
         field = np.maximum(field, mask.astype(np.float32))
 
-    blocks = field.reshape(out_size, supersample, out_size, supersample)
+    blocks = field.reshape(height, supersample, out_size, supersample)
     return cast(FloatArray, blocks.mean(axis=(1, 3)).astype(np.float32))
 
 

@@ -17,6 +17,7 @@ from src.generate_dataset import (
 from src.layouts import generate_dram_layout, generate_finfet_layout
 from src.render import (
     GroundTruth,
+    _render_rows,
     plan_pair,
     raster_centre_base,
     rasterize,
@@ -242,3 +243,78 @@ def test_validate_record_rejects_out_of_bounds_ground_truth():
     )
     with pytest.raises(ValueError, match="outside the search image"):
         validate_record(broken)
+
+
+@pytest.mark.parametrize("pitch_nm", [70.0, 80.0, 90.0, 100.0, 110.0])
+def test_commensurate_pitch_still_antialiases(pitch_nm):
+    """A lattice whose pitch is a whole number of pixels must still anti-alias.
+
+    Without the sheared sample grid every output pixel samples the same
+    sub-pixel phase, so a commensurate lattice renders with no grey edges and
+    its linewidth comes out up to 11% wide -- an error R2's linewidth-dependent
+    physics and any cited critical dimension would inherit.
+    """
+    fin_width = 18.0
+    layout = generate_finfet_layout(
+        EXTENT_NM, pitch_nm, fin_width, 12.0, _rng(), anchored=False, gate_pitch_nm=1.0e9
+    )
+    image = rasterize(layout, (6000.0, 6000.0), config.SEARCH_PX_NM, SMALL, supersample=4)
+    rendered_nm = float(image.mean()) * pitch_nm
+    assert abs(rendered_nm - fin_width) / fin_width < 0.03
+
+
+def test_zero_rotation_matches_rotated_linewidth():
+    """The two rendering paths must agree on how wide a fin is.
+
+    They are different code paths, and a systematic difference between them
+    would confound every per-pose comparison R3 makes.
+    """
+    fin_width, pitch = 18.0, 90.0
+    layout = generate_finfet_layout(
+        EXTENT_NM, pitch, fin_width, 12.0, _rng(), anchored=False, gate_pitch_nm=1.0e9
+    )
+    flat = rasterize(layout, (6000.0, 6000.0), config.SEARCH_PX_NM, SMALL, supersample=4)
+    tilted = rasterize(
+        layout, (6000.0, 6000.0), config.SEARCH_PX_NM, SMALL, rotation_deg=5.0, supersample=4
+    )
+    assert abs(float(flat.mean()) - float(tilted.mean())) < 0.02
+
+
+@pytest.mark.parametrize("rotation_deg", [0.0, 5.0])
+@pytest.mark.parametrize("supersample", [2, 4])
+def test_tiling_does_not_change_the_image(rotation_deg, supersample):
+    """Rendering in strips must be bit-identical to rendering in one pass.
+
+    Tiling exists to bound peak memory -- rendering a 1000 px image at
+    supersample 4 in one pass allocates roughly a gigabyte, enough to have
+    Windows tear down the WSL VM mid-run and leave a partial dataset behind.
+    It is only safe because each output pixel depends solely on its own
+    supersample block, so this test pins that property.
+    """
+    layout = generate_dram_layout(
+        EXTENT_NM, 187.3, 40.0, 60.0, _rng(1), anchored=True, anchor_centre_nm=(6000.0, 6000.0)
+    )
+    whole = rasterize(
+        layout,
+        (6000.0, 6000.0),
+        config.SEARCH_PX_NM,
+        SMALL,
+        rotation_deg=rotation_deg,
+        supersample=supersample,
+    )
+    strips = np.concatenate(
+        [
+            _render_rows(
+                layout,
+                (6000.0, 6000.0),
+                config.SEARCH_PX_NM,
+                SMALL,
+                first,
+                min(first + 37, SMALL),
+                rotation_deg=rotation_deg,
+                supersample=supersample,
+            )
+            for first in range(0, SMALL, 37)
+        ]
+    )
+    assert np.array_equal(whole, strips)
