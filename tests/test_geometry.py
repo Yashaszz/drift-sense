@@ -20,6 +20,7 @@ from src.generate_dataset import (
     build_dataset,
     count_anchors_in_reference,
     expected_pair_count,
+    file_tree_hash,
     image_tree_hash,
     validate_record,
     verify_dataset,
@@ -443,3 +444,35 @@ def test_image_tree_hash_ignores_the_dataset_location(tmp_path):
     build_dataset(first, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
     build_dataset(second, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
     assert image_tree_hash(first) == image_tree_hash(second)
+
+
+def test_pixel_hash_survives_re_encoding(tiny_dataset):
+    """Re-compressing a PNG must not change the fingerprint.
+
+    Two machines can encode identical images into different PNG files --
+    compression level, zlib build, Pillow version -- and a byte-level hash then
+    reports a difference that does not exist. That is what made a Linux and a
+    macOS checkout of the same commit look like different datasets.
+    """
+    from PIL import Image
+
+    before_pixels = image_tree_hash(tiny_dataset)
+    before_bytes = file_tree_hash(tiny_dataset)
+    for path in sorted(tiny_dataset.rglob("*.png")):
+        pixels = np.asarray(Image.open(path))
+        Image.fromarray(pixels).save(path, compress_level=1)
+
+    assert image_tree_hash(tiny_dataset) == before_pixels
+    assert file_tree_hash(tiny_dataset) != before_bytes
+
+
+def test_pixel_hash_still_catches_a_changed_pixel(tiny_dataset):
+    """Insensitivity to encoding must not cost sensitivity to content."""
+    from PIL import Image
+
+    before = image_tree_hash(tiny_dataset)
+    path = next(iter((tiny_dataset / "reference").glob("*.png")))
+    pixels = np.asarray(Image.open(path)).copy()
+    pixels[0, 0] = np.uint8((int(pixels[0, 0]) + 1) % 256)
+    Image.fromarray(pixels).save(path)
+    assert image_tree_hash(tiny_dataset) != before
