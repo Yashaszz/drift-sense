@@ -24,10 +24,18 @@ only when the detection statistic says the easy path was not enough.
 
 Status
 ------
-T0 skeleton. The public interface and the never-raises contract are final and
-exercised by tests. The stage bodies call placeholder implementations in
-:mod:`src.matcher`, so coordinates returned now are not meaningful answers —
-they are shape- and type-correct ones. Wiring lands in T6.
+Stages 2, 3, 3b and 5 are wired and produce real answers. The escalation ladder
+and the peak-to-sidelobe statistic are wired (T6, partial).
+
+Two pieces of Stage 4 are deliberately **not** wired.
+``disambiguate.select_candidate`` computes its centre tie-break by comparing
+candidate *top-left corners* against the search-image centre rather than
+candidate *centres*, which is wrong by half a template — roughly 49.5 px for a
+100 px template. Since the tie-break is the one rule the problem statement
+mandates explicitly, selection stays on the strongest peak until that is fixed,
+and ``n_tied`` stays unset because it is populated by the same call. A strict
+``xfail`` in ``tests/test_localize_escalation.py`` will fail the moment the bug
+is fixed, which is the signal to wire both in.
 """
 
 import argparse
@@ -37,7 +45,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src import config, matcher, pose
+from src import config, disambiguate, matcher, pose
 from src.confidence import ConfidenceModel, is_low_confidence
 from src.types import (
     AnyArray,
@@ -162,6 +170,70 @@ def _fallback_result(
 # ===========================================================================
 
 
+def _escalation_path(requested: Mode) -> tuple[Mode, ...]:
+    """Return the tiers to attempt, in order, for a requested mode.
+
+    Parameters
+    ----------
+    requested
+        The mode the caller asked for.
+
+    Returns
+    -------
+    tuple of Mode
+        A single tier for an explicit request; the full ladder for ``"auto"``.
+
+    Notes
+    -----
+    Cheap by default, expensive on demand. A tool making thousands of moves a
+    day is judged on *average* time, so the fast path runs first and compute is
+    escalated only when the detection statistic says it was not enough.
+    """
+    if requested == "auto":
+        return ("fast", "robust", "ambiguous")
+    return (requested,)
+
+
+def _should_escalate(diagnostics: Diagnostics, tier: Mode) -> bool:
+    """Decide whether the current tier's answer is too weak to accept.
+
+    Parameters
+    ----------
+    diagnostics
+        Evidence from the attempt that just finished.
+    tier
+        The tier that produced it.
+
+    Returns
+    -------
+    bool
+        ``True`` when a more expensive tier should be tried.
+
+    Notes
+    -----
+    A non-finite peak-to-sidelobe ratio means *unknown*, not *good*. R3's
+    implementation returns NaN when the sidelobe region is empty or has zero
+    variance, and a naive ``psr < threshold`` comparison silently answers False
+    for NaN — accepting an answer precisely when there is no evidence for it.
+    Unknown escalates.
+
+    The thresholds themselves are provisional. Measured on the first twelve
+    generated pairs, PSR ranged 1.77-3.08 on correct answers and 1.44-3.41 on
+    wrong ones: it does not yet separate the two, and the highest value in the
+    set belonged to a wrong answer. That is an honest reading rather than a
+    defect — an unweighted correlation surface over a periodic lattice really
+    does have no dominant peak, which is what Stage 4a uniqueness weighting
+    exists to fix. Until that lands, and until the dataset carries physics,
+    every case escalates: slower, but never falsely confident.
+    """
+    if tier == "ambiguous":
+        return False
+    if not np.isfinite(diagnostics.psr):
+        return True
+    threshold = config.PSR_ACCEPT_THRESHOLD if tier == "fast" else config.PSR_AMBIGUOUS_THRESHOLD
+    return bool(diagnostics.psr < threshold)
+
+
 def _resolve_psf_sigma(search: FloatArray, mode: Mode) -> float:
     """Choose the PSF width to build the template at.
 
@@ -241,15 +313,27 @@ def _run_pipeline(
         msg = "correlation surface has no distinguishable peak"
         raise _NoCandidatesError(msg)
 
-    # Stage 4 is R3's. Until disambiguate.select_candidate exists, take the
-    # strongest peak — which is exactly the mandated plain-NCC baseline
-    # behaviour, so this stub is a useful comparison point rather than a
-    # throwaway.
+    # Stage 4 selection is R3's. disambiguate.select_candidate() exists but its
+    # centre tie-break compares candidate *top-left corners* against the search
+    # image centre rather than candidate centres, which is wrong by half a
+    # template — about 49.5 px for a 100 px template. Wiring it would break the
+    # one rule the problem statement mandates explicitly, so selection stays on
+    # the strongest peak until that is fixed. That happens to be exactly the
+    # plain-NCC baseline behaviour, so the interim path is a useful comparison
+    # point rather than a placeholder.
+    #
+    # n_tied is left unset for the same reason: it is R3's to populate through
+    # select_candidate, and filling it with len(peaks) would report the
+    # shortlist length, which is a different quantity.
     best = peaks[0]
     diagnostics.ncc_peak = best.score
-    diagnostics.n_tied = len(peaks)
     diagnostics.theta_est = pose_estimate.theta_deg
     diagnostics.scale_est = pose_estimate.scale
+    diagnostics.psr = disambiguate.peak_to_sidelobe(
+        surface,
+        best,
+        exclusion_radius=config.DEFAULT_NMS_RADIUS_PX,
+    )
 
     centre_x, centre_y = best.centre(template.shape)
 
@@ -358,14 +442,24 @@ def localize(
 
     try:
         search_f, reference_f = _validate_inputs(search, reference)
-        resolved: Mode = "fast" if mode == "auto" else mode
-        diagnostics.mode_used = resolved
 
-        pose_estimate = _resolve_pose(search_f, reference_f, resolved)
-        psf_sigma = _resolve_psf_sigma(search_f, resolved)
-        centre_x, centre_y = _run_pipeline(
-            search_f, reference_f, pose_estimate, psf_sigma, diagnostics
-        )
+        centre_x = centre_y = 0.0
+        for tier in _escalation_path(mode):
+            diagnostics = Diagnostics(mode_used=tier)
+            pose_estimate = _resolve_pose(search_f, reference_f, tier)
+            psf_sigma = _resolve_psf_sigma(search_f, tier)
+            centre_x, centre_y = _run_pipeline(
+                search_f, reference_f, pose_estimate, psf_sigma, diagnostics
+            )
+            if tier == "ambiguous":
+                # The mandated centre tie-break belongs here. It is not wired
+                # because R3's select_candidate compares top-left corners rather
+                # than centres; see _run_pipeline. Reaching this tier is still
+                # recorded, so the diagnostics say plainly that the answer was
+                # ambiguous and that the deciding step was unavailable.
+                diagnostics.with_note("centre tie-break unavailable: awaiting R3 fix")
+            if not _should_escalate(diagnostics, tier):
+                break
 
         model = ConfidenceModel.load_or_default(None)
         confidence = float(np.clip(model.predict(diagnostics), 0.0, 1.0))

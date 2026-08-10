@@ -87,8 +87,17 @@ def extract_features(diagnostics: Diagnostics) -> Float64Array:
     -----
     This is data marshalling, not modelling, so it is implemented in full at T0:
     the feature layout is part of the interface other people build against.
+
+    The output is guaranteed finite. Upstream fields may legitimately be NaN —
+    ``psr`` is NaN whenever the sidelobe region is degenerate — and a single NaN
+    poisons a whole fitted model, so non-finite values are imputed to zero here.
+
+    That imputation is lossy: it makes "unmeasurable" indistinguishable from
+    "measured as zero". T7 should add a companion indicator feature rather than
+    rely on the imputation alone. Appending is safe; reordering is not, because
+    fitted coefficients are stored positionally.
     """
-    return np.array(
+    raw = np.array(
         [
             diagnostics.ncc_peak,
             diagnostics.psr,
@@ -99,6 +108,7 @@ def extract_features(diagnostics: Diagnostics) -> Float64Array:
         ],
         dtype=np.float64,
     )
+    return np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def heuristic_confidence(diagnostics: Diagnostics) -> float:
@@ -151,6 +161,12 @@ def is_low_confidence(confidence: float, diagnostics: Diagnostics) -> bool:
     so that a miscalibrated model cannot mask a known-bad case.
     """
     if diagnostics.failure_mode != "none":
+        return True
+    if not np.isfinite(diagnostics.psr):
+        # NaN means the ambiguity measure could not be computed, not that the
+        # answer is unambiguous. A bare ``psr < threshold`` comparison answers
+        # False for NaN, which would clear the flag exactly when there is no
+        # evidence to clear it with.
         return True
     if diagnostics.psr < config.PSR_AMBIGUOUS_THRESHOLD:
         return True
