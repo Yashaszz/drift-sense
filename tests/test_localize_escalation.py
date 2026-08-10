@@ -22,16 +22,6 @@ from src.types import Diagnostics, Peak
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R3's select_candidate compares candidate top-left corners against the "
-        "search-image centre instead of candidate centres, so it is wrong by "
-        "half a template (~49.5 px for a 100 px template). Strict xfail: this "
-        "test will FAIL once the bug is fixed, which is the signal to wire "
-        "select_candidate into localize() and delete this marker."
-    ),
-)
 def test_r3_tie_break_bug():
     """The mandated rule picks the candidate whose *centre* is nearest.
 
@@ -46,7 +36,7 @@ def test_r3_tie_break_bug():
 
     assert math.dist(a.centre(template_shape), centre) < math.dist(b.centre(template_shape), centre)
 
-    chosen, tie_break_used = select_candidate([a, b], centre)
+    chosen, tie_break_used = select_candidate([a, b], centre, template_shape)
     assert tie_break_used is True
     assert (chosen.col, chosen.row) == (a.col, a.row)
 

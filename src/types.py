@@ -261,7 +261,9 @@ class Diagnostics:
         Classification from the failure taxonomy.
     elapsed_ms
         Wall-clock time for the whole call, in milliseconds.
-    notes
+
+    Notes
+    -----
         Free-text breadcrumbs for failure analysis. Never parsed.
     """
 

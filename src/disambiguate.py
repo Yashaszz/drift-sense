@@ -143,6 +143,7 @@ def peak_to_sidelobe(
 def select_candidate(
     peaks: list[Peak],
     image_centre: tuple[float, float],
+    template_shape: tuple[int, int],
     tolerance: float = config.TIE_SIGMA,
 ) -> tuple[Peak, bool]:
     """Choose one candidate from the shortlist, applying the mandated tie-break.
@@ -153,6 +154,9 @@ def select_candidate(
         Candidates from :func:`src.matcher.top_k_peaks`, sorted by descending
         score.
     image_centre
+    template_shape
+        Shape of the template as ``(rows, cols)``. Needed to convert each
+        candidate's top-left corner to its centre before measuring distance.
         Centre of the **search** image as ``(x, y)``, from
         :func:`src.config.image_centre`. The problem statement specifies the
         search image, not the reference.
@@ -186,12 +190,11 @@ def select_candidate(
     if len(tied) == 1:
         return (tied[0], False)
 
-    # Distances compared in raw (col, row). The top-left -> centre offset is
-    # the same constant for every peak (one template), so it shifts all
-    # candidates equally and cannot change which is nearest to the centre.
     centre_x, centre_y = image_centre
-    nearest = min(
-        tied,
-        key=lambda p: ((p.col - centre_x) ** 2 + (p.row - centre_y) ** 2, p.row, p.col),
-    )
+
+    def _distance_key(p: Peak) -> tuple[float, int, int]:
+        px, py = p.centre(template_shape)
+        return ((px - centre_x) ** 2 + (py - centre_y) ** 2, p.row, p.col)
+
+    nearest = min(tied, key=_distance_key)
     return (nearest, True)
