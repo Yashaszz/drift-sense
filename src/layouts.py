@@ -387,9 +387,16 @@ def generate_dram_layout(
     centre = anchor_centre_nm if anchor_centre_nm is not None else (extent_nm / 2, extent_nm / 2)
     span = anchor_half_span_nm
     sites = _dram_sites_near(centre, pitch_nm, staggered=staggered, half_span_nm=span)
-    while len(sites) < 3:
-        span *= 1.6
-        sites = _dram_sites_near(centre, pitch_nm, staggered=staggered, half_span_nm=span)
+    if len(sites) < 3:
+        # Widening the search would place anchors outside the reference crop,
+        # which is the exact failure this parameter exists to prevent -- so say
+        # so instead. It means the crop is too small to hold three lattice
+        # sites: raise anchor_half_span_nm, or use a coarser pitch.
+        msg = (
+            f"only {len(sites)} lattice sites within {span:.0f} nm of the crop centre "
+            f"at pitch {pitch_nm:.0f} nm; need 3"
+        )
+        raise ValueError(msg)
 
     chosen = rng.choice(len(sites), size=3, replace=False)
     (x0, y0), (x1, y1), (x2, y2) = (sites[int(i)] for i in chosen)
@@ -485,10 +492,12 @@ def generate_finfet_layout(
 
     fin_lo = int(np.ceil((cx - span) / fin_pitch_nm))
     fin_hi = int(np.floor((cx + span) / fin_pitch_nm))
-    while fin_hi - fin_lo < 1:
-        span *= 1.6
-        fin_lo = int(np.ceil((cx - span) / fin_pitch_nm))
-        fin_hi = int(np.floor((cx + span) / fin_pitch_nm))
+    if fin_hi - fin_lo < 1:
+        msg = (
+            f"only {fin_hi - fin_lo + 1} fins within {span:.0f} nm of the crop centre "
+            f"at pitch {fin_pitch_nm:.0f} nm; need 2"
+        )
+        raise ValueError(msg)
     indices = list(range(fin_lo, fin_hi + 1))
     chosen = rng.choice(len(indices), size=2, replace=False)
     i_missing, i_double = indices[int(chosen[0])], indices[int(chosen[1])]
