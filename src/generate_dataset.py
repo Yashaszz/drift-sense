@@ -12,7 +12,9 @@ crop centre, and only then is anything rendered. See :class:`src.render.PairPlan
 """
 
 import argparse
+import hashlib
 import json
+import subprocess
 import time
 from collections import Counter
 from collections.abc import Sequence
@@ -34,7 +36,21 @@ from src.render import (
 )
 from src.types import FloatArray
 
-__all__ = ["PairRecord", "build_dataset", "main", "validate_record"]
+__all__ = [
+    "MANIFEST_NAME",
+    "PairRecord",
+    "build_dataset",
+    "image_tree_hash",
+    "main",
+    "validate_record",
+    "verify_dataset",
+]
+
+MANIFEST_NAME: str = "dataset_manifest.json"
+"""Filename of the manifest written alongside the images."""
+
+MANIFEST_SCHEMA_VERSION: int = 1
+"""Bumped when the manifest gains or loses a field."""
 
 DEFAULT_SEED: int = 20260807
 """Frozen base seed. Every pair's seed is this plus its index."""
@@ -112,6 +128,14 @@ FINFET_NOMINAL_NM: dict[str, float] = {
     "gate_pitch_nm": 420.0,
 }
 """Nominal FinFET dimensions the randomisation is centred on."""
+
+ANCHOR_SPAN_FRACTION: float = 0.34
+"""Half-width of the anchor placement box, as a fraction of the reference FOV.
+
+Derived rather than fixed: a constant in nanometres silently assumes a 1000 px
+reference, and any other ``out_size`` then places anchors outside the crop and
+fails ``validate_record``.
+"""
 
 PITCH_TOLERANCE: float = 0.20
 """Pitch randomisation, +-20% of nominal, per the work-split document."""
@@ -324,6 +348,7 @@ def _sample_layout(
     *,
     anchored: bool,
     anchor_centre_nm: tuple[float, float],
+    anchor_half_span_nm: float = 340.0,
 ) -> Layout:
     """Draw one randomised layout of the requested architecture.
 
@@ -337,6 +362,9 @@ def _sample_layout(
         Whether to place anchors.
     anchor_centre_nm
         Crop centre to place anchors around.
+    anchor_half_span_nm
+        Half-width of the box anchors are drawn from. Scale this with the
+        reference field of view, not with the die extent.
 
     Returns
     -------
@@ -356,6 +384,7 @@ def _sample_layout(
             variant=variant,
             anchored=anchored,
             anchor_centre_nm=anchor_centre_nm,
+            anchor_half_span_nm=anchor_half_span_nm,
         )
     return generate_finfet_layout(
         EXTENT_NM,
@@ -366,6 +395,7 @@ def _sample_layout(
         gate_pitch_nm=float(rng.uniform(*FINFET_RANGES["gate_pitch_nm"])),
         anchored=anchored,
         anchor_centre_nm=anchor_centre_nm,
+        anchor_half_span_nm=anchor_half_span_nm,
     )
 
 
@@ -427,6 +457,7 @@ def build_dataset(
     (output_dir / "reference").mkdir(exist_ok=True)
     (output_dir / "search").mkdir(exist_ok=True)
 
+    anchor_span_nm = out_size * config.REF_PX_NM * ANCHOR_SPAN_FRACTION
     records: list[PairRecord] = []
     started = time.perf_counter()
     index = 0
@@ -454,6 +485,7 @@ def build_dataset(
                             rng,
                             anchored=anchored,
                             anchor_centre_nm=plan.crop_centre_nm,
+                            anchor_half_span_nm=anchor_span_nm,
                         )
                         reference, search = render_pair(
                             layout, plan, out_size=out_size, supersample=supersample
@@ -493,12 +525,229 @@ def build_dataset(
                         records.append(record)
                         index += 1
 
+    expected = expected_pair_count(seeds_per_cell)
+    if len(records) != expected:
+        msg = f"generated {len(records)} pairs but the stratification demands {expected}"
+        raise ValueError(msg)
+
     gt_path = output_dir / "ground_truth.jsonl"
     with gt_path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record.to_dict()) + "\n")
 
+    write_manifest(
+        output_dir,
+        records,
+        seeds_per_cell=seeds_per_cell,
+        base_seed=base_seed,
+        out_size=out_size,
+        supersample=supersample,
+    )
     return records, time.perf_counter() - started, gt_path
+
+
+# ===========================================================================
+# Manifest
+# ===========================================================================
+
+
+def image_tree_hash(output_dir: Path) -> str:
+    """Return one fingerprint covering every PNG in a dataset.
+
+    Parameters
+    ----------
+    output_dir
+        Dataset root.
+
+    Returns
+    -------
+    str
+        Hex SHA-256 over ``"<file digest>  <relative path>"`` lines, sorted by
+        path.
+
+    Notes
+    -----
+    Paths are relative to ``output_dir``, so the value does not depend on where
+    the dataset happens to live or what ``--output-dir`` was called. Whole-tree
+    rather than per-file: the question worth answering is "do we hold the same
+    data", and one value answers it.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(output_dir.rglob("*.png")):
+        relative = path.relative_to(output_dir).as_posix()
+        file_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest.update(f"{file_digest}  {relative}\n".encode())
+    return digest.hexdigest()
+
+
+def _generator_commit() -> str:
+    """Return the current git commit, or ``"unknown"`` outside a checkout.
+
+    Returns
+    -------
+    str
+        Short commit hash, suffixed ``-dirty`` when the tree has local edits.
+
+    Notes
+    -----
+    This is what ties a ``results.csv`` back to the code that produced the data
+    it was measured on. Without it, a number in a report is unattributable once
+    anyone regenerates.
+    """
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"{commit}-dirty" if dirty else commit
+
+
+def expected_pair_count(seeds_per_cell: int) -> int:
+    """Return how many pairs a full run must produce.
+
+    Parameters
+    ----------
+    seeds_per_cell
+        Pairs per stratification cell.
+
+    Returns
+    -------
+    int
+        ``architecture x anchor x pose x noise x seeds_per_cell``.
+    """
+    return 2 * 2 * 3 * len(NOISE_LEVELS) * seeds_per_cell
+
+
+def write_manifest(
+    output_dir: Path,
+    records: list[PairRecord],
+    *,
+    seeds_per_cell: int,
+    base_seed: int,
+    out_size: int,
+    supersample: int,
+) -> Path:
+    """Write ``dataset_manifest.json`` describing this dataset.
+
+    Parameters
+    ----------
+    output_dir
+        Dataset root.
+    records
+        Records just generated.
+    seeds_per_cell
+        Pairs per stratification cell.
+    base_seed
+        Base seed used.
+    out_size
+        Image edge length in pixels.
+    supersample
+        Anti-aliasing factor used.
+
+    Returns
+    -------
+    Path
+        The manifest that was written.
+
+    Notes
+    -----
+    Since ``dataset/`` is gitignored, this file is the only thing tying a set of
+    results back to the data and the code that produced them. It also makes
+    truncation loud: a run killed partway writes a pair count that disagrees
+    with what the stratification demands, and :func:`verify_dataset` fails on it
+    instead of everyone comparing checksums by hand.
+    """
+    counts = {
+        axis: dict(Counter(r.strata[axis] for r in records))
+        for axis in ("architecture", "anchor", "noise_level", "pose_condition")
+    }
+    anchored = [r for r in records if r.strata["anchor"] == "anchored"]
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "pair_count": len(records),
+        "expected_pair_count": expected_pair_count(seeds_per_cell),
+        "image_count": len(records) * 2,
+        "image_tree_sha256": image_tree_hash(output_dir),
+        "generator_commit": _generator_commit(),
+        "generation": {
+            "seeds_per_cell": seeds_per_cell,
+            "seed": base_seed,
+            "out_size": out_size,
+            "supersample": supersample,
+            "extent_nm": EXTENT_NM,
+            "noise_levels": list(NOISE_LEVELS),
+        },
+        "strata_counts": counts,
+        "anchored_references_with_anchor": sum(1 for r in anchored if r.anchors_in_reference > 0),
+        "layout_ranges_nm": {"dram": DRAM_RANGES, "finfet": FINFET_RANGES},
+        "pose_ranges": {k: [list(v[0]), list(v[1])] for k, v in POSE_RANGES.items()},
+    }
+    path = output_dir / MANIFEST_NAME
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def verify_dataset(output_dir: Path) -> dict[str, Any]:
+    """Re-check a dataset on disk against its manifest.
+
+    Parameters
+    ----------
+    output_dir
+        Dataset root, containing a manifest.
+
+    Returns
+    -------
+    dict
+        The manifest, when everything agrees.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no manifest is present.
+    ValueError
+        If the pair count is short of what the stratification demands, if the
+        image count disagrees, or if the image-tree hash has drifted.
+    """
+    path = output_dir / MANIFEST_NAME
+    if not path.exists():
+        msg = f"no {MANIFEST_NAME} in {output_dir} -- regenerate the dataset"
+        raise FileNotFoundError(msg)
+    manifest: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+
+    if manifest["pair_count"] != manifest["expected_pair_count"]:
+        msg = (
+            f"truncated dataset: {manifest['pair_count']} pairs on record but the "
+            f"stratification demands {manifest['expected_pair_count']}"
+        )
+        raise ValueError(msg)
+
+    on_disk = len(list(output_dir.rglob("*.png")))
+    if on_disk != manifest["image_count"]:
+        msg = (
+            f"image count mismatch: {on_disk} PNGs on disk, manifest says {manifest['image_count']}"
+        )
+        raise ValueError(msg)
+
+    actual = image_tree_hash(output_dir)
+    if actual != manifest["image_tree_sha256"]:
+        msg = (
+            f"image tree has drifted: {actual} on disk, manifest says "
+            f"{manifest['image_tree_sha256']}"
+        )
+        raise ValueError(msg)
+    return manifest
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -522,7 +771,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seeds-per-cell", type=int, default=9)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--supersample", type=int, default=DEFAULT_SUPERSAMPLE)
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="check an existing dataset against its manifest instead of generating",
+    )
     args = parser.parse_args(argv)
+
+    if args.verify:
+        try:
+            manifest = verify_dataset(args.output_dir)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"FAILED: {exc}")
+            return 1
+        print(f"OK: {manifest['pair_count']} pairs, tree {manifest['image_tree_sha256'][:16]}...")
+        print(f"    generated by commit {manifest['generator_commit']}")
+        return 0
 
     records, elapsed, gt_path = build_dataset(
         args.output_dir,
@@ -538,6 +802,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     anchored = [r for r in records if r.strata["anchor"] == "anchored"]
     hits = sum(1 for r in anchored if r.anchors_in_reference > 0)
     print(f"  anchored references containing an anchor: {hits}/{len(anchored)}")
+
+    manifest = json.loads((args.output_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
+    print(f"  image tree sha256: {manifest['image_tree_sha256']}")
+    print(f"  generator commit:  {manifest['generator_commit']}")
+    print(f"  manifest:          {args.output_dir / MANIFEST_NAME}")
     return 0
 
 
