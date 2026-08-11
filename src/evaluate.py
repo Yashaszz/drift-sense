@@ -37,6 +37,7 @@ import numpy as np
 from PIL import Image
 
 from src.localize import localize
+from src.types import Mode
 
 # --------------------------------------------------------------------------
 # Ground-truth loading
@@ -190,13 +191,13 @@ def _signed_gap(estimate: object, truth: object) -> float:
     absolute values hides that distinction.
     """
     try:
-        gap = float(estimate) - float(truth)
+        gap = float(estimate) - float(truth)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return float("nan")
     return gap if math.isfinite(gap) else float("nan")
 
 
-def run_case(case: dict[str, Any], data_dir: Path, mode: str = "auto") -> dict[str, Any]:
+def run_case(case: dict[str, Any], data_dir: Path, mode: Mode = "auto") -> dict[str, Any]:
     """Run one pair and return a flat CSV row.
 
     ``localize()`` is contracted never to raise on valid input, so a non-empty
