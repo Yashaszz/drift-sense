@@ -45,7 +45,13 @@ import numpy as np
 from src import config
 from src.types import FloatArray, Peak
 
-__all__ = ["peak_to_sidelobe", "select_candidate", "uniqueness_map"]
+__all__ = [
+    "peak_to_sidelobe",
+    "select_candidate",
+    "sidelobe_stats",
+    "tied_candidates",
+    "uniqueness_map",
+]
 
 
 def uniqueness_map(
@@ -86,6 +92,54 @@ def uniqueness_map(
     return np.ones(reference.shape, dtype=np.float32)
 
 
+def sidelobe_stats(
+    surface: FloatArray,
+    peak: Peak,
+    exclusion_radius: int = config.DEFAULT_NMS_RADIUS_PX,
+) -> tuple[float, float]:
+    """Return ``(mean, std)`` of the surface outside the exclusion radius.
+
+    Exposed separately because the tie tolerance is specified in sidelobe
+    standard deviations (``config.TIE_SIGMA``) while :func:`select_candidate`
+    takes a tolerance in score units and never receives the surface. The
+    conversion happens at the call site; this is where the call site gets the
+    number.
+
+    Returns ``nan`` for either statistic when it is undefined, matching
+    :func:`peak_to_sidelobe`'s absent-measurement convention.
+    """
+    rows, cols = np.ogrid[: surface.shape[0], : surface.shape[1]]
+    sq_dist = (rows - peak.row) ** 2 + (cols - peak.col) ** 2
+    sidelobe = surface[sq_dist > exclusion_radius**2]
+
+    if sidelobe.size == 0:
+        return (float("nan"), float("nan"))
+
+    mean = float(np.nanmean(sidelobe))
+    std = float(np.nanstd(sidelobe))
+
+    if not np.isfinite(std) or std == 0.0:
+        return (mean, float("nan"))
+
+    return (mean, std)
+
+
+def tied_candidates(peaks: list[Peak], tolerance: float) -> list[Peak]:
+    """Return every candidate statistically indistinguishable from the best.
+
+    A non-finite ``tolerance`` means the sidelobe statistics were unavailable,
+    not that everything ties. It is coerced to zero — exact ties only — which
+    keeps the returned list non-empty. Comparing against NaN would return
+    ``False`` for every peak and hand :func:`select_candidate` an empty set.
+    """
+    if not peaks:
+        return []
+    if not np.isfinite(tolerance):
+        tolerance = 0.0
+    best_score = max(p.score for p in peaks)
+    return [p for p in peaks if best_score - p.score <= tolerance]
+
+
 def peak_to_sidelobe(
     surface: FloatArray,
     peak: Peak,
@@ -122,29 +176,17 @@ def peak_to_sidelobe(
     it for the peak-ratio test. It lives here, in R3's module, so there is one
     implementation rather than two that drift apart.
     """
-    peak_value = float(surface[peak.row, peak.col])
-
-    rows, cols = np.ogrid[: surface.shape[0], : surface.shape[1]]
-    sq_dist = (rows - peak.row) ** 2 + (cols - peak.col) ** 2
-    sidelobe = surface[sq_dist > exclusion_radius**2]
-
-    if sidelobe.size == 0:
+    mean, std = sidelobe_stats(surface, peak, exclusion_radius)
+    if not (np.isfinite(mean) and np.isfinite(std)):
         return float("nan")
-
-    sidelobe_mean = float(np.nanmean(sidelobe))
-    sidelobe_std = float(np.nanstd(sidelobe))
-
-    if not np.isfinite(sidelobe_std) or sidelobe_std == 0.0:
-        return float("nan")
-
-    return float((peak_value - sidelobe_mean) / sidelobe_std)
+    return float((float(surface[peak.row, peak.col]) - mean) / std)
 
 
 def select_candidate(
     peaks: list[Peak],
     image_centre: tuple[float, float],
     template_shape: tuple[int, int],
-    tolerance: float = config.TIE_SIGMA,
+    tolerance: float,
 ) -> tuple[Peak, bool]:
     """Choose one candidate from the shortlist, applying the mandated tie-break.
 
@@ -154,12 +196,13 @@ def select_candidate(
         Candidates from :func:`src.matcher.top_k_peaks`, sorted by descending
         score.
     image_centre
-    template_shape
-        Shape of the template as ``(rows, cols)``. Needed to convert each
-        candidate's top-left corner to its centre before measuring distance.
         Centre of the **search** image as ``(x, y)``, from
         :func:`src.config.image_centre`. The problem statement specifies the
         search image, not the reference.
+    template_shape
+        Shape of the template as ``(rows, cols)``. Needed to convert each
+        candidate's top-left corner to its centre before measuring distance.
+
     tolerance
         Tie width. Candidates scoring within this margin of the best are treated
         as statistically indistinguishable and go to the centre tie-break.
@@ -184,8 +227,7 @@ def select_candidate(
         msg = "select_candidate requires at least one candidate peak"
         raise ValueError(msg)
 
-    best_score = max(p.score for p in peaks)
-    tied = [p for p in peaks if best_score - p.score <= tolerance]
+    tied = tied_candidates(peaks, tolerance)
 
     if len(tied) == 1:
         return (tied[0], False)

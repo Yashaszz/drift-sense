@@ -36,7 +36,7 @@ def test_r3_tie_break_bug():
 
     assert math.dist(a.centre(template_shape), centre) < math.dist(b.centre(template_shape), centre)
 
-    chosen, tie_break_used = select_candidate([a, b], centre, template_shape)
+    chosen, tie_break_used = select_candidate([a, b], centre, template_shape, tolerance=0.0)
     assert tie_break_used is True
     assert (chosen.col, chosen.row) == (a.col, a.row)
 
@@ -185,7 +185,7 @@ def test_auto_reaches_the_ambiguous_tier_on_weak_evidence(two_scale_pair):
     reference, search, _ = two_scale_pair
     result = localize(search, reference, mode="auto")
     assert result.diagnostics.mode_used == "ambiguous"
-    assert any("tie-break unavailable" in note for note in result.diagnostics.notes)
+    assert result.diagnostics.n_tied >= 1
 
 
 def test_auto_still_produces_a_valid_answer(two_scale_pair):

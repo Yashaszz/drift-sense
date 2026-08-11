@@ -313,19 +313,25 @@ def _run_pipeline(
         msg = "correlation surface has no distinguishable peak"
         raise _NoCandidatesError(msg)
 
-    # Stage 4 selection is R3's. disambiguate.select_candidate() exists but its
-    # centre tie-break compares candidate *top-left corners* against the search
-    # image centre rather than candidate centres, which is wrong by half a
-    # template — about 49.5 px for a 100 px template. Wiring it would break the
-    # one rule the problem statement mandates explicitly, so selection stays on
-    # the strongest peak until that is fixed. That happens to be exactly the
-    # plain-NCC baseline behaviour, so the interim path is a useful comparison
-    # point rather than a placeholder.
-    #
-    # n_tied is left unset for the same reason: it is R3's to populate through
-    # select_candidate, and filling it with len(peaks) would report the
-    # shortlist length, which is a different quantity.
-    best = peaks[0]
+    sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
+        surface,
+        peaks[0],
+        exclusion_radius=config.DEFAULT_NMS_RADIUS_PX,
+    )
+
+    # TIE_SIGMA is a width in sidelobe standard deviations; select_candidate
+    # takes score units and never sees the surface, so convert here.
+    tolerance = config.TIE_SIGMA * sidelobe_std
+
+    tied = disambiguate.tied_candidates(peaks, tolerance)
+    best, tie_break_used = disambiguate.select_candidate(
+        peaks,
+        config.image_centre(search.shape),
+        template.shape,
+        tolerance=tolerance,
+    )
+    diagnostics.n_tied = len(tied)
+    diagnostics.tie_break_used = tie_break_used
     diagnostics.ncc_peak = best.score
     diagnostics.theta_est = pose_estimate.theta_deg
     diagnostics.scale_est = pose_estimate.scale
@@ -451,13 +457,6 @@ def localize(
             centre_x, centre_y = _run_pipeline(
                 search_f, reference_f, pose_estimate, psf_sigma, diagnostics
             )
-            if tier == "ambiguous":
-                # The mandated centre tie-break belongs here. It is not wired
-                # because R3's select_candidate compares top-left corners rather
-                # than centres; see _run_pipeline. Reaching this tier is still
-                # recorded, so the diagnostics say plainly that the answer was
-                # ambiguous and that the deciding step was unavailable.
-                diagnostics.with_note("centre tie-break unavailable: awaiting R3 fix")
             if not _should_escalate(diagnostics, tier):
                 break
 
