@@ -35,6 +35,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+
 from src.localize import localize
 
 # --------------------------------------------------------------------------
@@ -62,7 +63,7 @@ _KEY_ALIASES: dict[str, tuple[str, ...]] = {
 _REQUIRED = ("gt_x", "gt_y", "ref_path", "search_path")
 
 
-def _pick(record: dict[str, Any], field: str) -> Any:
+def _pick(record: dict[str, object], field: str) -> object:
     """Return the first alias of ``field`` found in ``record``, else None.
 
     Aliases containing dots are walked as nested keys, so ``ground_truth.x``
@@ -176,12 +177,12 @@ COLUMNS = [
 ]
 
 
-def _diag(diagnostics: Any, field: str) -> Any:
+def _diag(diagnostics: object, field: str) -> object:
     """Read a diagnostics field, tolerating absence during the build-out."""
     return getattr(diagnostics, field, float("nan"))
 
 
-def _signed_gap(estimate: Any, truth: Any) -> float:
+def _signed_gap(estimate: object, truth: object) -> float:
     """Return ``estimate - truth`` as a float, or NaN if either is unusable.
 
     Signed rather than absolute: a pose stage that is consistently biased in one
@@ -195,9 +196,7 @@ def _signed_gap(estimate: Any, truth: Any) -> float:
     return gap if math.isfinite(gap) else float("nan")
 
 
-def run_case(
-    case: dict[str, Any], data_dir: Path, mode: str = "auto"
-) -> dict[str, Any]:
+def run_case(case: dict[str, Any], data_dir: Path, mode: str = "auto") -> dict[str, Any]:
     """Run one pair and return a flat CSV row.
 
     ``localize()`` is contracted never to raise on valid input, so a non-empty
@@ -314,6 +313,7 @@ def summarise(rows: list[dict[str, Any]], group_by: str) -> list[tuple[Any, ...]
 
 
 def print_table(title: str, rows: list[tuple[Any, ...]]) -> None:
+    """Print a titled table of per-stratum metrics."""
     print(f"\n{title}")
     print(
         f"{'group':<18}{'n':>4}{'succ@1px':>10}{'med_err':>10}"
@@ -321,10 +321,7 @@ def print_table(title: str, rows: list[tuple[Any, ...]]) -> None:
     )
     print("-" * 71)
     for key, n, succ, med, psr, tie, ms in rows:
-        print(
-            f"{key!s:<18}{n:>4}{succ:>10.3f}{med:>10.3f}"
-            f"{psr:>10.3f}{tie:>10.3f}{ms:>9.1f}"
-        )
+        print(f"{key!s:<18}{n:>4}{succ:>10.3f}{med:>10.3f}{psr:>10.3f}{tie:>10.3f}{ms:>9.1f}")
 
 
 # --------------------------------------------------------------------------
@@ -362,6 +359,7 @@ def recall_at_k_pass(cases: list[dict[str, Any]], data_dir: Path, k: int = 30) -
 
 
 def main() -> None:
+    """Run the evaluation harness from the command line."""
     parser = argparse.ArgumentParser(description="R3 evaluation harness")
     parser.add_argument("--data", type=Path, default=Path("data"))
     parser.add_argument(
