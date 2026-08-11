@@ -87,9 +87,7 @@ def _gaussian_kernel(sigma: float) -> Array:
         dtype=np.float32,
     )
 
-    kernel = np.exp(
-        -0.5 * (axis / sigma) ** 2
-    )
+    kernel = np.exp(-0.5 * (axis / sigma) ** 2)
 
     return kernel / kernel.sum()
 
@@ -120,10 +118,7 @@ def _gaussian_filter1d(
 
     padded = np.pad(
         values,
-        [
-            (pad, pad) if i == axis else (0, 0)
-            for i in range(values.ndim)
-        ],
+        [(pad, pad) if i == axis else (0, 0) for i in range(values.ndim)],
         mode="reflect",
     )
 
@@ -187,30 +182,12 @@ def _sobel_magnitude(
         mode="reflect",
     )
 
-    gx = (
-        (
-            padded[:-2, 2:]
-            + 2 * padded[1:-1, 2:]
-            + padded[2:, 2:]
-        )
-        - (
-            padded[:-2, :-2]
-            + 2 * padded[1:-1, :-2]
-            + padded[2:, :-2]
-        )
+    gx = (padded[:-2, 2:] + 2 * padded[1:-1, 2:] + padded[2:, 2:]) - (
+        padded[:-2, :-2] + 2 * padded[1:-1, :-2] + padded[2:, :-2]
     )
 
-    gy = (
-        (
-            padded[2:, :-2]
-            + 2 * padded[2:, 1:-1]
-            + padded[2:, 2:]
-        )
-        - (
-            padded[:-2, :-2]
-            + 2 * padded[:-2, 1:-1]
-            + padded[:-2, 2:]
-        )
+    gy = (padded[2:, :-2] + 2 * padded[2:, 1:-1] + padded[2:, 2:]) - (
+        padded[:-2, :-2] + 2 * padded[:-2, 1:-1] + padded[:-2, 2:]
     )
 
     return np.hypot(
@@ -292,8 +269,7 @@ def _validate_noise_level(
 
     if noise_level not in NOISE_LEVELS:
         raise ValueError(
-            f"unknown noise level {noise_level!r}; "
-            f"supported levels are {NOISE_LEVELS}"
+            f"unknown noise level {noise_level!r}; supported levels are {NOISE_LEVELS}"
         )
 
     return noise_level
@@ -319,13 +295,9 @@ def _apply_noise_level(
 
     scaling = NOISE_SCALING[noise_level]
 
-    config["shot_noise"]["white_counts"] *= (
-        scaling["white_counts"]
-    )
+    config["shot_noise"]["white_counts"] *= scaling["white_counts"]
 
-    config["read_noise"]["sigma"] *= (
-        scaling["read_noise_sigma"]
-    )
+    config["read_noise"]["sigma"] *= scaling["read_noise_sigma"]
 
     return config
 
@@ -338,10 +310,7 @@ def _as_unit_float32(
     image = np.asarray(img)
 
     if image.ndim != 2:
-        raise ValueError(
-            f"img must be a 2-D grayscale array; "
-            f"got {image.shape!r}"
-        )
+        raise ValueError(f"img must be a 2-D grayscale array; got {image.shape!r}")
 
     if np.issubdtype(
         image.dtype,
@@ -350,14 +319,9 @@ def _as_unit_float32(
         info = np.iinfo(image.dtype)
 
         if info.min < 0:
-            raise ValueError(
-                "integer img must have an unsigned intensity dtype"
-            )
+            raise ValueError("integer img must have an unsigned intensity dtype")
 
-        image = (
-            image.astype(np.float32)
-            / np.float32(info.max)
-        )
+        image = image.astype(np.float32) / np.float32(info.max)
 
     else:
         image = image.astype(
@@ -365,12 +329,8 @@ def _as_unit_float32(
             copy=False,
         )
 
-    if not np.all(
-        np.isfinite(image)
-    ):
-        raise ValueError(
-            "img contains NaN or infinity"
-        )
+    if not np.all(np.isfinite(image)):
+        raise ValueError("img contains NaN or infinity")
 
     return np.clip(
         image,
@@ -387,18 +347,12 @@ def _nm_to_px(
     px_nm: float,
 ) -> float:
     if px_nm <= 0 or not np.isfinite(px_nm):
-        raise ValueError(
-            "px_nm must be a finite positive number"
-        )
+        raise ValueError("px_nm must be a finite positive number")
 
     if length_nm < 0 or not np.isfinite(length_nm):
-        raise ValueError(
-            "length parameters must be finite and non-negative"
-        )
+        raise ValueError("length parameters must be finite and non-negative")
 
-    return float(
-        length_nm / px_nm
-    )
+    return float(length_nm / px_nm)
 
 
 def edge_brightening(
@@ -415,18 +369,10 @@ def edge_brightening(
     gradient magnitude is robustly normalised and softly spread near edges.
     """
 
-    if (
-        strength < 0
-        or not 0 < percentile <= 100
-    ):
-        raise ValueError(
-            "edge strength must be >= 0 and "
-            "percentile in (0, 100]"
-        )
+    if strength < 0 or not 0 < percentile <= 100:
+        raise ValueError("edge strength must be >= 0 and percentile in (0, 100]")
 
-    gradient = _sobel_magnitude(
-        img
-    )
+    gradient = _sobel_magnitude(img)
 
     scale = float(
         np.percentile(
@@ -435,13 +381,7 @@ def edge_brightening(
         )
     )
 
-    if (
-        scale
-        <= np.finfo(
-            np.float32
-        ).eps
-        or strength == 0
-    ):
+    if scale <= np.finfo(np.float32).eps or strength == 0:
         return img.astype(
             np.float32,
             copy=True,
@@ -467,9 +407,7 @@ def edge_brightening(
         img + strength * edge,
         0.0,
         1.0,
-    ).astype(
-        np.float32
-    )
+    ).astype(np.float32)
 
 
 def psf_blur(
@@ -494,9 +432,7 @@ def psf_blur(
     return _gaussian_filter(
         img,
         sigma=sigma_px,
-    ).astype(
-        np.float32
-    )
+    ).astype(np.float32)
 
 
 def poisson_shot_noise(
@@ -507,27 +443,19 @@ def poisson_shot_noise(
 ) -> Array:
     """Sample signal-dependent shot noise using an effective-count scale."""
 
-    if (
-        white_counts <= 0
-        or not np.isfinite(white_counts)
-    ):
-        raise ValueError(
-            "white_counts must be finite and positive"
-        )
+    if white_counts <= 0 or not np.isfinite(white_counts):
+        raise ValueError("white_counts must be finite and positive")
 
     counts = rng.poisson(
         np.clip(
             img,
             0.0,
             1.0,
-        ) * white_counts
+        )
+        * white_counts
     )
 
-    return (
-        counts / white_counts
-    ).astype(
-        np.float32
-    )
+    return (counts / white_counts).astype(np.float32)
 
 
 def read_noise(
@@ -538,13 +466,8 @@ def read_noise(
 ) -> Array:
     """Add independent zero-mean Gaussian detector/read noise."""
 
-    if (
-        sigma < 0
-        or not np.isfinite(sigma)
-    ):
-        raise ValueError(
-            "read-noise sigma must be finite and non-negative"
-        )
+    if sigma < 0 or not np.isfinite(sigma):
+        raise ValueError("read-noise sigma must be finite and non-negative")
 
     if sigma == 0:
         return img.astype(
@@ -559,9 +482,7 @@ def read_noise(
             sigma,
             size=img.shape,
         )
-    ).astype(
-        np.float32
-    )
+    ).astype(np.float32)
 
 
 def scan_artifacts(
@@ -586,14 +507,8 @@ def scan_artifacts(
         stripe_amplitude,
     )
 
-    if any(
-        value < 0
-        or not np.isfinite(value)
-        for value in values
-    ):
-        raise ValueError(
-            "scan parameters must be finite and non-negative"
-        )
+    if any(value < 0 or not np.isfinite(value) for value in values):
+        raise ValueError("scan parameters must be finite and non-negative")
 
     rows = img.shape[0]
 
@@ -632,45 +547,23 @@ def scan_artifacts(
         rows / 12.0,
     )
 
-    banding = (
-        stripe_amplitude
-        * np.sin(
-            2.0
-            * np.pi
-            * np.arange(rows)
-            / period_rows
-            + phase
-        )
-    )
+    banding = stripe_amplitude * np.sin(2.0 * np.pi * np.arange(rows) / period_rows + phase)
 
-    return (
-        img * (1.0 + gain[:, None])
-        + offset[:, None]
-        + banding[:, None]
-    ).astype(
-        np.float32
-    )
+    return (img * (1.0 + gain[:, None]) + offset[:, None] + banding[:, None]).astype(np.float32)
 
 
 def _merge_params(
     base: Mapping[str, Any],
     overrides: Mapping[str, Any],
 ) -> dict[str, Any]:
-    merged = deepcopy(
-        dict(base)
-    )
+    merged = deepcopy(dict(base))
 
     for name, value in overrides.items():
-        if (
-            isinstance(value, Mapping)
-            and isinstance(
-                merged.get(name),
-                Mapping,
-            )
+        if isinstance(value, Mapping) and isinstance(
+            merged.get(name),
+            Mapping,
         ):
-            merged[name].update(
-                value
-            )
+            merged[name].update(value)
         else:
             merged[name] = value
 
@@ -708,36 +601,23 @@ def apply_sem_chain(
     """
 
     if not isinstance(rng, np.random.Generator):
-        raise TypeError(
-            "rng must be numpy.random.Generator"
-        )
+        raise TypeError("rng must be numpy.random.Generator")
 
     # ---------------------------------------------------------------
     # Preset selection
     # ---------------------------------------------------------------
 
     if isinstance(params, str):
-
         if params not in PRESETS:
-            raise ValueError(
-                f"unknown preset {params!r}; "
-                f"choose from {sorted(PRESETS)}"
-            )
+            raise ValueError(f"unknown preset {params!r}; choose from {sorted(PRESETS)}")
 
         preset = params
         noise_level = "none"
 
-        config = deepcopy(
-            PRESETS[preset]
-        )
+        config = deepcopy(PRESETS[preset])
 
     else:
-
-        supplied = (
-            {}
-            if params is None
-            else dict(params)
-        )
+        supplied = {} if params is None else dict(params)
 
         preset = supplied.pop(
             "preset",
@@ -745,19 +625,14 @@ def apply_sem_chain(
         )
 
         if preset not in PRESETS:
-            raise ValueError(
-                f"unknown preset {preset!r}; "
-                f"choose from {sorted(PRESETS)}"
-            )
+            raise ValueError(f"unknown preset {preset!r}; choose from {sorted(PRESETS)}")
 
         noise_level = supplied.pop(
             "noise_level",
             "none",
         )
 
-        _validate_noise_level(
-            noise_level
-        )
+        _validate_noise_level(noise_level)
 
         config = _merge_params(
             PRESETS[preset],
@@ -774,17 +649,11 @@ def apply_sem_chain(
     # Edge brightening, PSF blur and scan artifacts remain fixed
     # within each capture preset.
 
-    scaling = NOISE_SCALING[
-        noise_level
-    ]
+    scaling = NOISE_SCALING[noise_level]
 
-    config["shot_noise"]["white_counts"] *= (
-        scaling["white_counts"]
-    )
+    config["shot_noise"]["white_counts"] *= scaling["white_counts"]
 
-    config["read_noise"]["sigma"] *= (
-        scaling["read_noise_sigma"]
-    )
+    config["read_noise"]["sigma"] *= scaling["read_noise_sigma"]
 
     # ---------------------------------------------------------------
     # Frozen SEM physics chain
