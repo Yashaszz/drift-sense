@@ -265,3 +265,15 @@ def window_topleft_to_centre(
     if PIXEL_CENTRE_AT_INTEGER:
         return (col + (t_cols - 1) / 2.0, row + (t_rows - 1) / 2.0)
     return (col + t_cols / 2.0, row + t_rows / 2.0)
+
+
+# --- Stage 4a: uniqueness weighting -----------------------------------------
+UNIQUENESS_PREFILTER_SIGMA_PX: Final[float] = 4.0
+UNIQUENESS_FLOOR: Final[float] = 0.05
+UNIQUENESS_MIN_TILE_PX: Final[int] = 16
+
+# --- PSR --------------------------------------------------------------------
+# Split from DEFAULT_NMS_RADIUS_PX: correlation main-lobe width, not lattice
+# pitch. Equal at 8 today by coincidence; must not track each other once R1
+# randomises pitch.
+PSR_EXCLUSION_RADIUS_PX: Final[int] = 8
