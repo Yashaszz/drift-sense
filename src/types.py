@@ -261,6 +261,10 @@ class Diagnostics:
         Classification from the failure taxonomy.
     elapsed_ms
         Wall-clock time for the whole call, in milliseconds.
+    stage_ms
+        Per-stage wall-clock breakdown, in milliseconds, accumulated across
+        escalation tiers. Empty unless ``config.COLLECT_STAGE_TIMINGS`` is on,
+        so the instrumentation costs nothing in production.
 
     Notes
     -----
@@ -279,6 +283,7 @@ class Diagnostics:
     mode_used: str = "fast"
     failure_mode: FailureMode = "none"
     elapsed_ms: float = 0.0
+    stage_ms: dict[str, float] = field(default_factory=dict)
     notes: tuple[str, ...] = ()
 
     def with_note(self, note: str) -> None:

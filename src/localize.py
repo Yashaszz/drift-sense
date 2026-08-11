@@ -44,7 +44,8 @@ import argparse
 import hashlib
 import time
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -150,6 +151,29 @@ def _uniqueness_for(reference: FloatArray) -> FloatArray:
     while len(_UNIQUENESS_CACHE) > config.UNIQUENESS_CACHE_ENTRIES:
         _UNIQUENESS_CACHE.popitem(last=False)
     return computed
+
+
+@contextmanager
+def _stage_timer(diagnostics: Diagnostics, stage: str) -> Iterator[None]:
+    """Accumulate wall-clock time for one stage into the diagnostics record.
+
+    Accumulates rather than assigns: a stage runs once per escalation tier, and
+    what matters for optimisation is what the *call* spent there in total. A
+    stage served from :class:`_StageCache` contributes nothing on the tier that
+    hit, which is what makes the caching visible in the breakdown.
+
+    Costs a ``perf_counter`` pair per stage when enabled and a single boolean
+    test when not, so the shipped path is unaffected.
+    """
+    if not config.COLLECT_STAGE_TIMINGS:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = (time.perf_counter() - started) * 1000.0
+        diagnostics.stage_ms[stage] = diagnostics.stage_ms.get(stage, 0.0) + elapsed
 
 
 def clear_uniqueness_cache() -> None:
@@ -700,7 +724,8 @@ def _run_pipeline(
     # unweighted, so paying for it would buy nothing. Resolving the flag here
     # keeps the cache key honest: the two paths share an entry precisely when
     # they produce the same surface.
-    effective_weighting = weighted and cache.uniqueness_is_informative()
+    with _stage_timer(diagnostics, "uniqueness_map"):
+        effective_weighting = weighted and cache.uniqueness_is_informative()
 
     if weighted:
         # Set before the cache lookup, and outside the cached outcome, because
@@ -719,7 +744,8 @@ def _run_pipeline(
         # the same numbers at full cost.
         return cached.apply(diagnostics)
 
-    template, surface, peaks = cache.correlate(*key)
+    with _stage_timer(diagnostics, "correlate"):
+        template, surface, peaks = cache.correlate(*key)
     if not peaks:
         msg = "correlation surface has no distinguishable peak"
         raise _NoCandidatesError(msg)
@@ -731,23 +757,25 @@ def _run_pipeline(
     # constant here re-coupled them at the call site, which meant any change to
     # the NMS radius would silently move every PSR value and every escalation
     # decision with it.
-    sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
-        surface,
-        peaks[0],
-        exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
-    )
+    with _stage_timer(diagnostics, "sidelobe_stats"):
+        sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
+            surface,
+            peaks[0],
+            exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
+        )
 
     # TIE_SIGMA is a width in sidelobe standard deviations; select_candidate
     # takes score units and never sees the surface, so convert here.
     tolerance = config.TIE_SIGMA * sidelobe_std
 
-    tied = disambiguate.tied_candidates(peaks, tolerance)
-    best, tie_break_used = disambiguate.select_candidate(
-        peaks,
-        config.image_centre(search.shape),
-        template.shape,
-        tolerance=tolerance,
-    )
+    with _stage_timer(diagnostics, "select_candidate"):
+        tied = disambiguate.tied_candidates(peaks, tolerance)
+        best, tie_break_used = disambiguate.select_candidate(
+            peaks,
+            config.image_centre(search.shape),
+            template.shape,
+            tolerance=tolerance,
+        )
     diagnostics.n_tied = len(tied)
     diagnostics.tie_break_used = tie_break_used
     diagnostics.ncc_peak = best.score
@@ -768,13 +796,14 @@ def _run_pipeline(
 
     centre_x, centre_y = best.centre(template.shape)
 
-    refinement = matcher.refine_subpixel_detailed(
-        template,
-        search,
-        best,
-        surface=surface,
-        upsample=config.DEFAULT_UPSAMPLE,
-    )
+    with _stage_timer(diagnostics, "refine_subpixel"):
+        refinement = matcher.refine_subpixel_detailed(
+            template,
+            search,
+            best,
+            surface=surface,
+            upsample=config.DEFAULT_UPSAMPLE,
+        )
     outcome = _TierOutcome(
         centre=(centre_x + refinement.dx, centre_y + refinement.dy),
         n_tied=len(tied),
@@ -886,10 +915,16 @@ def localize(
         cache = _StageCache(search_f, reference_f)
 
         centre_x = centre_y = 0.0
+        # One dict shared by every tier's record, so the breakdown reports what
+        # the whole call spent in each stage rather than only the tier that
+        # happened to answer.
+        stage_ms = diagnostics.stage_ms
         for tier in _escalation_path(mode):
-            diagnostics = Diagnostics(mode_used=tier)
-            pose_estimate = _resolve_pose(search_f, reference_f, tier)
-            psf_sigma = cache.psf_sigma(tier)
+            diagnostics = Diagnostics(mode_used=tier, stage_ms=stage_ms)
+            with _stage_timer(diagnostics, "pose"):
+                pose_estimate = _resolve_pose(search_f, reference_f, tier)
+            with _stage_timer(diagnostics, "psf_sigma"):
+                psf_sigma = cache.psf_sigma(tier)
             # Uniqueness weighting is the payload of escalation, not the default:
             # it costs three correlations instead of one, and it only helps when
             # the cheap path has already reported weak evidence.

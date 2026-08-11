@@ -124,6 +124,17 @@ Zero disables the cache and restores per-call computation, which is what a
 cold-start benchmark wants.
 """
 
+COLLECT_STAGE_TIMINGS: bool = False
+"""Whether ``localize`` records a per-stage wall-clock breakdown.
+
+Off by default so the shipped path pays nothing: a tool making thousands of
+moves a day should not be timing itself. Benchmarks and tuning sweeps turn it on
+to get ``Diagnostics.stage_ms`` populated, which is how the uniqueness map was
+identified as 68% of runtime.
+
+Deliberately not ``Final`` — it is a switch, not a constant.
+"""
+
 PSR_ACCEPT_THRESHOLD: Final[float] = 8.0
 """Peak-to-sidelobe ratio above which a match is accepted without escalation."""
 
