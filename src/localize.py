@@ -41,7 +41,9 @@ here.
 """
 
 import argparse
+import hashlib
 import time
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -79,6 +81,84 @@ centre, so acting on an untrustworthy estimate is worse than ignoring it:
 assuming nominal is at least unbiased. Tuned against the pose-quality
 distribution once R2's estimator produces real values.
 """
+
+
+_UniquenessKey: TypeAlias = tuple[object, int, bytes]
+"""Implementation, tile size, and reference content. See :func:`_uniqueness_for`."""
+
+_UNIQUENESS_CACHE: "OrderedDict[_UniquenessKey, FloatArray]" = OrderedDict()
+"""Uniqueness maps from previous calls, newest last. See :func:`_uniqueness_for`."""
+
+
+def _reference_digest(reference: FloatArray) -> bytes:
+    """Fingerprint a reference image by content.
+
+    Identity is the wrong key: callers routinely pass a fresh array read from
+    disk for the same physical site, and two equal arrays must hit the same
+    entry. Content hashing costs about 3 ms on a 1000x1000 float32 reference
+    against the 400 ms it guards, and ``shape`` is folded in so that two arrays
+    sharing a buffer layout but not a shape cannot collide.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(repr(reference.shape).encode())
+    digest.update(np.ascontiguousarray(reference).view(np.uint8).reshape(-1).tobytes())
+    return digest.digest()
+
+
+def _uniqueness_for(reference: FloatArray) -> FloatArray:
+    """Return R3's uniqueness map for a reference, reusing a recent computation.
+
+    Measured at production shapes, ``uniqueness_map`` is 411 ms of a 647 ms
+    ``localize`` call — 68% of runtime, and the single largest cost in the
+    pipeline. It scores the *reference* alone, so it is invariant to everything
+    the escalation ladder varies and to the search image entirely.
+
+    :class:`_StageCache` already memoises it within one call. This is the tier
+    above: a bounded, process-wide cache so that repeat visits to the same site
+    pay for it once. That is the shape of the real workload — a wafer tool
+    revisits a site, and every ablation sweep runs one pair through several
+    configurations — where the per-call cache is by construction cold.
+
+    A distinct reference every call, as in a 108-pair benchmark sweep, gets no
+    benefit and pays only the digest. That is the intended trade.
+
+    The key carries the *implementation* alongside the content, because the
+    reference does not determine the map on its own — the function that scored
+    it does. ``benchmarks/verify_uniqueness_integration.py`` substitutes a
+    stand-in map to measure what R3's stage is worth, and an ablation sweep does
+    the same; keying on content alone would serve the real map to a run that
+    asked for the stand-in and quietly report the two as identical. Tile size is
+    in the key for the same reason.
+
+    Returns the cached array itself rather than a copy. Callers treat the map as
+    read-only; :func:`src.matcher.build_weight` does not mutate it.
+    """
+    implementation = disambiguate.uniqueness_map
+    tile = config.DEFAULT_UNIQUENESS_TILE_PX
+
+    if config.UNIQUENESS_CACHE_ENTRIES <= 0:
+        return implementation(reference, tile=tile)
+
+    key: _UniquenessKey = (implementation, tile, _reference_digest(reference))
+    hit = _UNIQUENESS_CACHE.get(key)
+    if hit is not None:
+        _UNIQUENESS_CACHE.move_to_end(key)
+        return hit
+
+    computed = implementation(reference, tile=tile)
+    _UNIQUENESS_CACHE[key] = computed
+    while len(_UNIQUENESS_CACHE) > config.UNIQUENESS_CACHE_ENTRIES:
+        _UNIQUENESS_CACHE.popitem(last=False)
+    return computed
+
+
+def clear_uniqueness_cache() -> None:
+    """Drop every cached uniqueness map.
+
+    Exposed for benchmarks, which must measure a cold computation, and for tests
+    that assert on call counts.
+    """
+    _UNIQUENESS_CACHE.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,13 +346,13 @@ class _StageCache:
         Notes
         -----
         Scoring the reference depends on nothing that varies between tiers, so
-        it is memoised alongside the PSF estimate.
+        it is memoised alongside the PSF estimate. The process-wide cache behind
+        :func:`_uniqueness_for` extends the same reuse across calls; this
+        attribute stays because it avoids re-hashing the reference on every
+        tier.
         """
         if self._uniqueness is None:
-            self._uniqueness = disambiguate.uniqueness_map(
-                self._reference,
-                tile=config.DEFAULT_UNIQUENESS_TILE_PX,
-            )
+            self._uniqueness = _uniqueness_for(self._reference)
         return self._uniqueness
 
     def uniqueness_is_informative(self) -> bool:

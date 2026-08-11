@@ -109,6 +109,18 @@ DEFAULT_PSF_SIGMA_PX: Final[float] = 1.0
 DEFAULT_UNIQUENESS_TILE_PX: Final[int] = 64
 """Tile edge length for the Stage 4a uniqueness map, in reference pixels."""
 
+UNIQUENESS_CACHE_ENTRIES: Final[int] = 4
+"""How many reference uniqueness maps to keep cached process-wide.
+
+Scoring a reference costs about 400 ms at production shapes — 68% of a
+``localize`` call — and depends on the reference alone, so a repeat visit to the
+same site should not pay it twice. Each entry holds one ``float32`` map the size
+of the reference, so four entries is roughly 16 MB at 1000x1000.
+
+Zero disables the cache and restores per-call computation, which is what a
+cold-start benchmark wants.
+"""
+
 PSR_ACCEPT_THRESHOLD: Final[float] = 8.0
 """Peak-to-sidelobe ratio above which a match is accepted without escalation."""
 
