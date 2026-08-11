@@ -16,17 +16,16 @@ Stage 5 — subpixel refinement
 
 Status
 ------
-Stages 2 (T4), 3 (T2), 3b (T3) and 5 (T5) are implemented. Masked correlation
-is the only piece still deferred (T8); it returns a correctly typed and
-correctly *shaped* result, and warns, so the end-to-end pipeline runs and
-downstream modules can be written against it.
+Stages 2 (T4), 3 (T2), 3b (T3) and 5 (T5) are implemented, including the
+uniqueness-weighted correlation path (T8).
 
-Placeholder outputs are deliberately shape-correct rather than pass-through.
-Shape is the part of the contract that downstream code depends on — a
-pass-through stub would let shape bugs hide until integration.
+The weighted path is exercised but not yet *informative*: ``uniqueness_map``
+still returns a constant, under which weighted correlation provably reduces to
+the unweighted result. That equivalence is the contract between the two paths
+and is asserted directly, so the weighting starts doing real work the moment R3
+lands a non-constant map, with no change here.
 """
 
-import warnings
 from collections.abc import Sequence
 from functools import lru_cache
 
@@ -77,6 +76,14 @@ The band excludes the lowest frequencies, where the scene's own structure
 dominates, and the highest, where the noise floor flattens the rolloff.
 """
 
+_MIN_WEIGHTED_VARIANCE: float = 1e-12
+"""Weighted variance below which a template or window carries no usable signal.
+
+Smaller than the unweighted guard because both inputs are standardised before
+the weighted correlation, so variances are of order one rather than of order
+the data range.
+"""
+
 _FLAT_SURFACE_ATOL: float = 1e-12
 """Range below which a correlation surface is treated as carrying no peaks.
 
@@ -103,6 +110,7 @@ failure, since it is both wrong and maximally confident.
 __all__ = [
     "area_average_downsample",
     "build_template",
+    "build_weight",
     "estimate_psf_sigma",
     "match_psf",
     "refine_subpixel",
@@ -627,6 +635,70 @@ def build_template(
     return area_average_downsample(blurred, scale)
 
 
+def build_weight(
+    weight_map: FloatArray,
+    theta: float,
+    scale: float,
+) -> FloatArray:
+    """Carry a reference-resolution weight map onto the template grid.
+
+    ``uniqueness_map`` scores the reference at 1 nm/px, but the correlation
+    consumes a weight shaped like the template, roughly ten times smaller. The
+    weight must land on the same grid as the template and stay aligned with it
+    pixel for pixel, so it goes through the *same* rotation, the same valid-area
+    crop and the same area-average decimation.
+
+    Parameters
+    ----------
+    weight_map
+        Uniqueness weights at reference resolution, same shape as the reference.
+    theta
+        Rotation in degrees. Must match the value given to
+        :func:`build_template`.
+    scale
+        Decimation ratio. Must match the value given to :func:`build_template`.
+
+    Returns
+    -------
+    FloatArray
+        Weights on the template grid, ``float32``, the same shape
+        :func:`build_template` produces for the same ``theta`` and ``scale``.
+
+    Raises
+    ------
+    ValueError
+        If ``scale`` is not strictly positive, or the map is not a finite
+        two-dimensional array.
+
+    Notes
+    -----
+    Two steps of the image pipeline are deliberately **not** applied.
+
+    No PSF blur. The point-spread function models how the instrument smeared the
+    *signal*; the weight map is not signal, it is a statement about which parts
+    of the reference are informative. Blurring it would bleed an anchor's
+    importance into neighbouring periodic regions and dilute exactly the
+    discrimination the weighting exists to provide.
+
+    No standardisation. The weights are a non-negative importance profile, not
+    an intensity field. Centring them would make some negative, which is
+    meaningless in a weighted variance, and rescaling them is pointless because
+    :func:`_zncc_masked_fft` normalises by their sum regardless.
+
+    Area-averaging *is* applied, and is the right decimation here for the same
+    reason as for the image: the coarse-grid weight of a cell should be the mean
+    importance of the fine pixels that fall inside it.
+    """
+    if scale <= 0.0:
+        msg = f"scale must be strictly positive, got {scale!r}"
+        raise ValueError(msg)
+
+    working = _as_working_array(weight_map, "weight_map")
+    rotated = rotate_image(working, theta)
+    cropped = _crop_to_valid_rotation(rotated, theta)
+    return area_average_downsample(cropped, scale)
+
+
 # ===========================================================================
 # Stage 3 — matched filtering
 # ===========================================================================
@@ -786,54 +858,134 @@ def _zncc_opencv(template: FloatArray, search: FloatArray) -> FloatArray:
     return surface
 
 
+def _standardise(image: FloatArray) -> FloatArray:
+    """Centre and scale an image to unit variance.
+
+    Parameters
+    ----------
+    image
+        Input array.
+
+    Returns
+    -------
+    FloatArray
+        ``(image - mean) / std``, or the centred image when the standard
+        deviation is degenerate.
+
+    Notes
+    -----
+    Purely a conditioning step, and free of consequence: weighted ZNCC is
+    invariant to any positive affine rescaling of either input, so this cannot
+    change the result. It matters because the weighted formulation accumulates
+    ``sum(w * S**2)`` and then subtracts ``(sum(w * S))**2``. On raw 8-bit data
+    those terms are of order 1e4 and nearly equal, and float32 carries about
+    seven significant digits, so the difference loses most of its precision to
+    cancellation. Standardising first keeps both terms of order one.
+    """
+    centred = image - float(np.mean(image, dtype=np.float64))
+    spread = float(np.std(centred, dtype=np.float64))
+    if spread < _MIN_TEMPLATE_STD:
+        return np.ascontiguousarray(centred, dtype=np.float32)
+    return np.ascontiguousarray(centred / spread, dtype=np.float32)
+
+
 def _zncc_masked_fft(
     template: FloatArray,
     search: FloatArray,
     weight: FloatArray,
 ) -> FloatArray:
-    """Masked normalized cross-correlation in the Fourier domain.
+    """Weighted zero-mean normalized cross-correlation.
 
-    Implements the masked-correlation formulation, which extends standard
-    FFT-based normalized cross-correlation to a per-pixel weight mask by
-    accumulating the masked sums as additional correlations.
+    Extends ZNCC with a per-pixel weight over the template, so that informative
+    regions of the reference count for more than periodic ones. Every mean and
+    variance below is taken *under the weights* rather than uniformly.
+
+    With ``w`` normalised to sum to one, writing ``mu_T = sum(w * T)`` and
+    ``S_uv`` for the search window at ``(u, v)``:
+
+    - numerator   ``sum(w * (T - mu_T) * (S_uv - mu_S))``
+    - denominator ``sqrt(sum(w * (T - mu_T)**2) * sum(w * (S_uv - mu_S)**2))``
+
+    Expanding removes every per-position sum over the template, leaving three
+    plain cross-correlations that OpenCV evaluates directly::
+
+        C1 = xcorr(S,    w * T)      -> sum(w * T * S_uv)
+        C2 = xcorr(S,    w)          -> sum(w * S_uv)      = mu_S
+        C3 = xcorr(S**2, w)          -> sum(w * S_uv**2)
+
+        numerator   = C1 - mu_T * C2
+        var_T       = sum(w * T**2) - mu_T**2        (a scalar)
+        var_S       = C3 - C2**2
 
     Parameters
     ----------
     template
-        Template as ``(t_rows, t_cols)``.
+        Template as ``(t_rows, t_cols)``, contiguous ``float32``.
     search
-        Search image as ``(rows, cols)``.
+        Search image as ``(rows, cols)``, contiguous ``float32``.
     weight
         Per-pixel weights over the template, same shape as ``template``.
+        Non-negative; scale is irrelevant because the weights are normalised
+        internally by their sum.
 
     Returns
     -------
     FloatArray
-        Correlation surface, ``float32``.
-
-    Warns
-    -----
-    UserWarning
-        Always, until T8. The masked formulation is not implemented yet and this
-        falls back to unmasked correlation, which ignores the weight entirely.
-        Warning rather than raising keeps the never-raises contract intact while
-        making sure a caller cannot mistake the fallback for a working masked
-        correlation.
+        Correlation surface, ``float32``, values in ``[-1, 1]``.
 
     Notes
     -----
-    With an all-ones weight this must agree with :func:`_zncc_opencv` to within
-    floating-point tolerance. That equivalence is the primary correctness test
-    once the real implementation lands.
+    Normalising by the weight sum is what makes a *constant* weight map
+    reproduce plain ZNCC exactly: every weighted mean collapses to the ordinary
+    mean and the common factor cancels between numerator and denominator. That
+    equivalence is the contract with the unweighted path and is asserted
+    directly by the tests, which is what makes this implementation checkable at
+    all while ``uniqueness_map`` still returns a constant.
+
+    The weights are clipped at zero. A negative weight would make the
+    denominator's variance term meaningless, and the interface promises
+    non-negative values, so a negative one is a caller error rather than a case
+    to model.
     """
-    del weight  # placeholder: masked formulation lands in T8
-    warnings.warn(
-        "masked ZNCC is not implemented yet (T8); ignoring the weight mask and "
-        "returning unmasked correlation",
-        UserWarning,
-        stacklevel=3,
+    t_rows, t_cols = template.shape
+    rows, cols = search.shape
+    surface_shape_ = (rows - t_rows + 1, cols - t_cols + 1)
+
+    weights = np.clip(weight, 0.0, None).astype(np.float32)
+    total = float(np.sum(weights, dtype=np.float64))
+    if total <= 0.0:
+        return np.zeros(surface_shape_, dtype=np.float32)
+    weights = np.ascontiguousarray(weights / total, dtype=np.float32)
+
+    template_n = _standardise(template)
+    search_n = _standardise(search)
+
+    mean_t = float(np.sum(weights * template_n, dtype=np.float64))
+    var_t = float(np.sum(weights * template_n.astype(np.float64) ** 2)) - mean_t**2
+    if var_t < _MIN_WEIGHTED_VARIANCE:
+        # Under these weights the template is effectively flat, so it localises
+        # nothing. Zero is the honest surface, matching the unweighted guard.
+        return np.zeros(surface_shape_, dtype=np.float32)
+
+    kernel_wt = np.ascontiguousarray(weights * template_n, dtype=np.float32)
+    corr_wt = cv2.matchTemplate(search_n, kernel_wt, cv2.TM_CCORR)
+    corr_w = cv2.matchTemplate(search_n, weights, cv2.TM_CCORR)
+    corr_w_sq = cv2.matchTemplate(
+        np.ascontiguousarray(search_n * search_n, dtype=np.float32),
+        weights,
+        cv2.TM_CCORR,
     )
-    return _zncc_opencv(template, search)
+
+    numerator = corr_wt - mean_t * corr_w
+    var_s = np.clip(corr_w_sq - corr_w * corr_w, 0.0, None)
+
+    denominator = np.sqrt(var_t * var_s, dtype=np.float32)
+    surface: FloatArray = np.zeros(surface_shape_, dtype=np.float32)
+    np.divide(numerator, denominator, out=surface, where=denominator > _MIN_WEIGHTED_VARIANCE)
+
+    np.nan_to_num(surface, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+    np.clip(surface, -1.0, 1.0, out=surface)
+    return surface
 
 
 # ===========================================================================

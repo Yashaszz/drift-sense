@@ -100,7 +100,7 @@ def test_estimate_is_computed_once_and_reused(cache, monkeypatch):
 
 
 def test_outcome_round_trips(cache):
-    key = (0.0, 10.0, 1.0)
+    key = (0.0, 10.0, 1.0, False)
     assert cache.outcome(key) is None
 
     outcome = _TierOutcome(
@@ -111,12 +111,13 @@ def test_outcome_round_trips(cache):
         theta_est=0.0,
         scale_est=10.0,
         psr=4.2,
+        uniqueness_score=0.5,
         subpixel_error=0.01,
         subpixel_method="phase_cross_correlation",
     )
     cache.store(key, outcome)
     assert cache.outcome(key) is outcome
-    assert cache.outcome((0.0, 10.0, 2.0)) is None
+    assert cache.outcome((0.0, 10.0, 2.0, False)) is None
 
 
 def test_outcome_apply_populates_every_field_but_mode():
@@ -129,6 +130,7 @@ def test_outcome_apply_populates_every_field_but_mode():
         theta_est=1.5,
         scale_est=10.2,
         psr=3.3,
+        uniqueness_score=0.75,
         subpixel_error=0.02,
         subpixel_method="surface_upsampling",
     )
@@ -136,6 +138,7 @@ def test_outcome_apply_populates_every_field_but_mode():
     assert diagnostics.n_tied == 7
     assert diagnostics.tie_break_used is True
     assert diagnostics.psr == 3.3
+    assert diagnostics.uniqueness_score == 0.75
     assert diagnostics.subpixel_method == "surface_upsampling"
     assert diagnostics.mode_used == "ambiguous"
 

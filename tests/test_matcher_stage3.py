@@ -287,20 +287,28 @@ def test_does_not_mutate_its_inputs(search_image, template_and_truth):
 # ---------------------------------------------------------------------------
 
 
-def test_weight_warns_that_masking_is_not_implemented(search_image, template_and_truth):
+def test_weight_no_longer_warns(search_image, template_and_truth):
+    """The masked path is implemented; passing a weight must be silent."""
+    import warnings
+
     template, _, _ = template_and_truth
-    weight = np.ones_like(template)
-    with pytest.warns(UserWarning, match="masked ZNCC is not implemented"):
-        matcher.zncc_surface(template, search_image, weight=weight)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        matcher.zncc_surface(template, search_image, weight=np.ones_like(template))
 
 
-def test_weighted_fallback_currently_equals_unmasked(search_image, template_and_truth):
-    """Locks the documented fallback behaviour so T8 changing it is visible."""
+def test_constant_weight_reproduces_the_unweighted_surface(search_image, template_and_truth):
+    """The contract between the two paths, asserted directly.
+
+    Normalising the weights by their sum makes every weighted mean collapse to
+    the ordinary mean, so a constant map must reproduce plain ZNCC. This is what
+    makes the weighted path checkable while ``uniqueness_map`` still returns a
+    constant.
+    """
     template, _, _ = template_and_truth
-    unmasked = matcher.zncc_surface(template, search_image)
-    with pytest.warns(UserWarning):
-        masked = matcher.zncc_surface(template, search_image, weight=np.ones_like(template))
-    np.testing.assert_array_equal(masked, unmasked)
+    unweighted = matcher.zncc_surface(template, search_image)
+    weighted = matcher.zncc_surface(template, search_image, weight=np.ones_like(template))
+    np.testing.assert_allclose(weighted, unweighted, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------

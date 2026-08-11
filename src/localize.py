@@ -25,17 +25,19 @@ only when the detection statistic says the easy path was not enough.
 Status
 ------
 Stages 2, 3, 3b, 4 and 5 are wired and produce real answers, with the escalation
-ladder and the peak-to-sidelobe statistic in place.
+ladder, the peak-to-sidelobe statistic and the uniqueness-weighted correlation
+path (T8) in place.
 
 A per-call memo (:class:`_StageCache`) collapses escalation tiers that resolve
-to the same pose and PSF width. It is a caching layer only: a miss computes
-exactly what the uncached path computed, and the outputs were verified
-bit-identical across every diagnostic field on the generated dataset. It took
-the auto-mode median from 360 ms to 105 ms.
+to the same pose, PSF width and weighting. It is a caching layer only: a miss
+computes exactly what the uncached path computed, and the outputs are verified
+bit-identical across every diagnostic field on the generated dataset.
 
-Masked correlation is the remaining gap. The integration point is
-:meth:`_StageCache.correlate`, which is the single place a weight mask has to
-enter both the correlation call and the cache key.
+Weighting is skipped while ``uniqueness_map`` returns a constant, because a
+constant map makes weighted correlation identical to unweighted. That is an
+equivalence rather than an approximation, and it reverses itself automatically:
+the moment R3 lands a non-constant map the weighted path engages with no change
+here.
 """
 
 import argparse
@@ -43,6 +45,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeAlias
 
 import numpy as np
 
@@ -60,6 +63,12 @@ from src.types import (
 )
 
 __all__ = ["localize", "main"]
+
+_CacheKey: TypeAlias = tuple[float, float, float, bool]
+"""Everything that can change a tier's outcome: pose, PSF width, weighting."""
+
+_CONSTANT_WEIGHT_ATOL: float = 1e-6
+"""Range below which a uniqueness map counts as constant, and weighting is skipped."""
 
 _MIN_POSE_QUALITY: float = 0.2
 """Quality below which R2's pose estimate is discarded in favour of nominal.
@@ -89,6 +98,7 @@ class _TierOutcome:
     theta_est: float
     scale_est: float
     psr: float
+    uniqueness_score: float
     subpixel_error: float
     subpixel_method: str
 
@@ -113,6 +123,7 @@ class _TierOutcome:
         diagnostics.theta_est = self.theta_est
         diagnostics.scale_est = self.scale_est
         diagnostics.psr = self.psr
+        diagnostics.uniqueness_score = self.uniqueness_score
         diagnostics.subpixel_error = self.subpixel_error
         diagnostics.subpixel_method = self.subpixel_method
         return self.centre
@@ -140,7 +151,16 @@ class _StageCache:
     what the uncached path computed.
     """
 
-    __slots__ = ("_key", "_outcomes", "_psf_sigma", "_reference", "_result", "_search")
+    __slots__ = (
+        "_key",
+        "_outcomes",
+        "_psf_sigma",
+        "_reference",
+        "_result",
+        "_search",
+        "_uniqueness",
+        "_weights",
+    )
 
     def __init__(self, search: FloatArray, reference: FloatArray) -> None:
         """Bind the cache to one image pair.
@@ -155,11 +175,13 @@ class _StageCache:
         self._search = search
         self._reference = reference
         self._psf_sigma: float | None = None
-        self._key: tuple[float, float, float] | None = None
+        self._key: _CacheKey | None = None
         self._result: tuple[FloatArray, FloatArray, list[Peak]] | None = None
-        self._outcomes: dict[tuple[float, float, float], _TierOutcome] = {}
+        self._outcomes: dict[_CacheKey, _TierOutcome] = {}
+        self._uniqueness: FloatArray | None = None
+        self._weights: dict[tuple[float, float], FloatArray] = {}
 
-    def outcome(self, key: tuple[float, float, float]) -> _TierOutcome | None:
+    def outcome(self, key: _CacheKey) -> _TierOutcome | None:
         """Return a previously computed tier outcome, if one matches.
 
         Parameters
@@ -174,7 +196,7 @@ class _StageCache:
         """
         return self._outcomes.get(key)
 
-    def store(self, key: tuple[float, float, float], outcome: _TierOutcome) -> None:
+    def store(self, key: _CacheKey, outcome: _TierOutcome) -> None:
         """Record a tier outcome against its parameters.
 
         Parameters
@@ -214,11 +236,78 @@ class _StageCache:
             self._psf_sigma = matcher.estimate_psf_sigma(self._search)
         return self._psf_sigma
 
+    def uniqueness(self) -> FloatArray:
+        """Return the reference-resolution uniqueness map, computed once.
+
+        Returns
+        -------
+        FloatArray
+            R3's weight map over the reference, same shape as the reference.
+
+        Notes
+        -----
+        Scoring the reference depends on nothing that varies between tiers, so
+        it is memoised alongside the PSF estimate.
+        """
+        if self._uniqueness is None:
+            self._uniqueness = disambiguate.uniqueness_map(
+                self._reference,
+                tile=config.DEFAULT_UNIQUENESS_TILE_PX,
+            )
+        return self._uniqueness
+
+    def uniqueness_is_informative(self) -> bool:
+        """Whether the uniqueness map actually distinguishes anything.
+
+        Returns
+        -------
+        bool
+            ``True`` when the map varies; ``False`` when it is constant.
+
+        Notes
+        -----
+        A constant weight map is provably a no-op: normalising by the weight
+        sum makes weighted correlation reduce exactly to the unweighted result,
+        which is the contract asserted in the weighted-path tests. Running the
+        weighted formulation anyway costs three cross-correlations instead of
+        one - measured at 69 ms against 34 ms - for a surface that differs only
+        at the 1e-6 level of float32 rounding.
+
+        Skipping it is therefore an equivalence, not an approximation. It also
+        means the weighting starts costing something exactly when it starts
+        being worth something: the moment R3's map stops being constant, this
+        returns ``True`` and the weighted path engages with no change here.
+        """
+        weights = self.uniqueness()
+        return bool(float(weights.max()) - float(weights.min()) > _CONSTANT_WEIGHT_ATOL)
+
+    def template_weight(self, theta: float, scale: float) -> FloatArray:
+        """Return the uniqueness map carried onto the template grid.
+
+        Parameters
+        ----------
+        theta
+            Rotation in degrees, matching the template.
+        scale
+            Decimation ratio, matching the template.
+
+        Returns
+        -------
+        FloatArray
+            Weights on the template grid.
+        """
+        cached = self._weights.get((theta, scale))
+        if cached is None:
+            cached = matcher.build_weight(self.uniqueness(), theta, scale)
+            self._weights[(theta, scale)] = cached
+        return cached
+
     def correlate(
         self,
         theta: float,
         scale: float,
         psf_sigma: float,
+        weighted: bool = False,
     ) -> tuple[FloatArray, FloatArray, list[Peak]]:
         """Build the template, correlate, and extract candidates.
 
@@ -239,12 +328,12 @@ class _StageCache:
 
         Notes
         -----
-        When the masked-correlation path lands, the weight mask becomes part of
-        the key: it changes the surface, so it must invalidate the cache. The
-        call to :func:`src.matcher.zncc_surface` already accepts ``weight`` and
-        is the single place that needs to change.
+        ``weighted`` is part of the key because it changes the surface. The
+        weight map itself is not: it is a deterministic function of the
+        reference and of ``(theta, scale)``, all of which the key already
+        covers.
         """
-        key = (theta, scale, psf_sigma)
+        key = (theta, scale, psf_sigma, weighted)
         if self._key != key or self._result is None:
             template = matcher.build_template(
                 self._reference,
@@ -252,7 +341,8 @@ class _StageCache:
                 scale=scale,
                 psf_sigma_px=psf_sigma,
             )
-            surface = matcher.zncc_surface(template, self._search)
+            weight = self.template_weight(theta, scale) if weighted else None
+            surface = matcher.zncc_surface(template, self._search, weight=weight)
             peaks = matcher.top_k_peaks(
                 surface,
                 k=config.DEFAULT_TOP_K,
@@ -473,6 +563,7 @@ def _run_pipeline(
     search: FloatArray,
     pose_estimate: PoseEstimate,
     psf_sigma: float,
+    weighted: bool,
     diagnostics: Diagnostics,
 ) -> tuple[float, float]:
     """Run Stages 2, 3, 3b, 4 and 5 for one pose hypothesis.
@@ -488,6 +579,8 @@ def _run_pipeline(
         Rotation and scale hypothesis to build the template at.
     psf_sigma
         Target PSF width in search pixels.
+    weighted
+        Whether to weight the correlation by the reference's uniqueness map.
     diagnostics
         Evidence record, updated in place.
 
@@ -505,7 +598,13 @@ def _run_pipeline(
         If the geometry is impossible, such as a template larger than the
         search image.
     """
-    key = (pose_estimate.theta_deg, pose_estimate.scale, psf_sigma)
+    # A constant uniqueness map makes weighted correlation identical to
+    # unweighted, so paying for it would buy nothing. Resolving the flag here
+    # keeps the cache key honest: the two paths share an entry precisely when
+    # they produce the same surface.
+    effective_weighting = weighted and cache.uniqueness_is_informative()
+
+    key = (pose_estimate.theta_deg, pose_estimate.scale, psf_sigma, effective_weighting)
     cached = cache.outcome(key)
     if cached is not None:
         # An earlier tier already resolved to these exact parameters. The whole
@@ -540,6 +639,11 @@ def _run_pipeline(
     diagnostics.ncc_peak = best.score
     diagnostics.theta_est = pose_estimate.theta_deg
     diagnostics.scale_est = pose_estimate.scale
+    if weighted:
+        # Reported whenever the map was computed, not only when the weighting
+        # engaged. "Is there an anchor at all?" is evidence about the reference
+        # and is worth knowing even on a map too flat to be worth applying.
+        diagnostics.uniqueness_score = float(np.mean(cache.uniqueness(), dtype=np.float64))
     # The sidelobe statistics around peaks[0] are already in hand. When the
     # tie-break did not move the selection - the common case - the excluded
     # region is identical, so the ratio follows directly. Re-scanning cost 24 ms
@@ -570,6 +674,7 @@ def _run_pipeline(
         theta_est=pose_estimate.theta_deg,
         scale_est=pose_estimate.scale,
         psr=diagnostics.psr,
+        uniqueness_score=diagnostics.uniqueness_score,
         subpixel_error=refinement.error,
         subpixel_method=refinement.method,
     )
@@ -677,8 +782,11 @@ def localize(
             diagnostics = Diagnostics(mode_used=tier)
             pose_estimate = _resolve_pose(search_f, reference_f, tier)
             psf_sigma = cache.psf_sigma(tier)
+            # Uniqueness weighting is the payload of escalation, not the default:
+            # it costs three correlations instead of one, and it only helps when
+            # the cheap path has already reported weak evidence.
             centre_x, centre_y = _run_pipeline(
-                cache, search_f, pose_estimate, psf_sigma, diagnostics
+                cache, search_f, pose_estimate, psf_sigma, tier != "fast", diagnostics
             )
             if not _should_escalate(diagnostics, tier):
                 break

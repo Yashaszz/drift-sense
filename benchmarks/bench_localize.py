@@ -214,6 +214,61 @@ def time_localize(
     return float(np.median(samples)), float(np.percentile(samples, 95))
 
 
+def bench_weighting(pairs: list[tuple[str, np.ndarray, np.ndarray]]) -> dict[str, float]:
+    """Compare weighted against unweighted correlation on the dataset.
+
+    Weighted correlation costs three cross-correlations where the unweighted
+    path costs one, so the accuracy it buys has to be worth roughly triple the
+    Stage 3 time. This measures both sides of that trade.
+
+    Parameters
+    ----------
+    pairs
+        Image pairs to evaluate.
+
+    Returns
+    -------
+    dict
+        Median milliseconds and mean peak height for each path, plus the
+        largest surface difference seen.
+    """
+    plain_ms: list[float] = []
+    weighted_ms: list[float] = []
+    plain_peak: list[float] = []
+    weighted_peak: list[float] = []
+    max_difference = 0.0
+
+    for _, reference, search in pairs:
+        reference_f = np.ascontiguousarray(reference, dtype=np.float32)
+        search_f = np.ascontiguousarray(search, dtype=np.float32)
+        template = matcher.build_template(
+            reference_f, 0.0, config.NOMINAL_SCALE, config.DEFAULT_PSF_SIGMA_PX
+        )
+        weights = matcher.build_weight(
+            disambiguate.uniqueness_map(reference_f), 0.0, config.NOMINAL_SCALE
+        )
+
+        started = time.perf_counter()
+        plain = matcher.zncc_surface(template, search_f)
+        plain_ms.append((time.perf_counter() - started) * 1000.0)
+
+        started = time.perf_counter()
+        weighted = matcher.zncc_surface(template, search_f, weight=weights)
+        weighted_ms.append((time.perf_counter() - started) * 1000.0)
+
+        plain_peak.append(float(plain.max()))
+        weighted_peak.append(float(weighted.max()))
+        max_difference = max(max_difference, float(np.abs(weighted - plain).max()))
+
+    return {
+        "plain_median_ms": float(np.median(plain_ms)),
+        "weighted_median_ms": float(np.median(weighted_ms)),
+        "plain_mean_peak": float(np.mean(plain_peak)),
+        "weighted_mean_peak": float(np.mean(weighted_peak)),
+        "max_surface_difference": max_difference,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Print the profile and the end-to-end timings.
 
@@ -270,6 +325,24 @@ def main(argv: list[str] | None = None) -> int:
         timings[mode] = {"median_ms": median, "p95_ms": p95}
         print(f"{mode:<12} {median:>9.1f}m {p95:>9.1f}m")
 
+    print()
+    print("Stage 3 - weighted vs unweighted correlation")
+    weighting = bench_weighting(pairs)
+    print(f"{'path':<14} {'median':>10} {'mean peak':>11}")
+    print("-" * 37)
+    print(
+        f"{'unweighted':<14} {weighting['plain_median_ms']:>9.1f}m "
+        f"{weighting['plain_mean_peak']:>11.4f}"
+    )
+    print(
+        f"{'weighted':<14} {weighting['weighted_median_ms']:>9.1f}m "
+        f"{weighting['weighted_mean_peak']:>11.4f}"
+    )
+    print(
+        f"cost ratio {weighting['weighted_median_ms'] / weighting['plain_median_ms']:.2f}x   "
+        f"largest surface difference {weighting['max_surface_difference']:.2e}"
+    )
+
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -284,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
                 for name in timer.total
             },
             "localize": timings,
+            "weighting": weighting,
         }
         args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"\nWrote {args.json}")
