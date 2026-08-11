@@ -133,7 +133,8 @@ on this data.
 consequences of TIE_SIGMA = 0.0. That value is correct — at the previous 1.0 a
 sigma width was being passed as a raw score tolerance, tying all 30 candidates
 on 102 of 105 cases and handing the answer to the centre prior blind. Fixing it
-recovered roughly 8x accuracy. The side effect is that the tie-break flag
+recovered accuracy by close to an order of magnitude. The side effect is that
+the tie-break flag
 carries no information as a confidence feature.
 
 **Latency.** Median 351 ms with uniqueness weighting against 105 ms without.
