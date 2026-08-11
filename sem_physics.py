@@ -15,8 +15,9 @@ ground truth remains valid.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -98,7 +99,6 @@ def _gaussian_filter1d(
     axis: int = 0,
 ) -> Array:
     """Gaussian smoothing via SciPy, or a compact NumPy fallback."""
-
     if sigma <= 0:
         return values.astype(
             np.float32,
@@ -266,7 +266,6 @@ def _validate_noise_level(
     noise_level: str,
 ) -> str:
     """Validate the requested noise severity level."""
-
     if noise_level not in NOISE_LEVELS:
         raise ValueError(
             f"unknown noise level {noise_level!r}; supported levels are {NOISE_LEVELS}"
@@ -289,7 +288,6 @@ def _apply_noise_level(
 
     ``read_noise.sigma`` is multiplied directly by its severity factor.
     """
-
     if noise_level == "none":
         return config
 
@@ -306,7 +304,6 @@ def _as_unit_float32(
     img: Array,
 ) -> Array:
     """Return a clipped 2-D grayscale image as float32 in [0, 1]."""
-
     image = np.asarray(img)
 
     if image.ndim != 2:
@@ -368,7 +365,6 @@ def edge_brightening(
     This is an intentionally simple proxy for SEM edge brightening: Sobel
     gradient magnitude is robustly normalised and softly spread near edges.
     """
-
     if strength < 0 or not 0 < percentile <= 100:
         raise ValueError("edge strength must be >= 0 and percentile in (0, 100]")
 
@@ -417,7 +413,6 @@ def psf_blur(
     px_nm: float,
 ) -> Array:
     """Apply an isotropic Gaussian PSF approximation."""
-
     sigma_px = _nm_to_px(
         sigma_nm,
         px_nm,
@@ -442,7 +437,6 @@ def poisson_shot_noise(
     rng: np.random.Generator,
 ) -> Array:
     """Sample signal-dependent shot noise using an effective-count scale."""
-
     if white_counts <= 0 or not np.isfinite(white_counts):
         raise ValueError("white_counts must be finite and positive")
 
@@ -465,7 +459,6 @@ def read_noise(
     rng: np.random.Generator,
 ) -> Array:
     """Add independent zero-mean Gaussian detector/read noise."""
-
     if sigma < 0 or not np.isfinite(sigma):
         raise ValueError("read-noise sigma must be finite and non-negative")
 
@@ -499,7 +492,6 @@ def scan_artifacts(
     This models intensity variation between scan lines only. It deliberately
     does not apply row displacement, which would alter image geometry.
     """
-
     values = (
         row_gain_std,
         row_offset_std,
@@ -596,10 +588,10 @@ def apply_sem_chain(
         rng:
             Caller-owned numpy.random.Generator.
 
-    Returns:
+    Returns
+    -------
         Same-shape float32 image clipped to [0, 1].
     """
-
     if not isinstance(rng, np.random.Generator):
         raise TypeError("rng must be numpy.random.Generator")
 
