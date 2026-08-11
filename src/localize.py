@@ -653,8 +653,7 @@ def _should_escalate(diagnostics: Diagnostics, tier: Mode) -> bool:
         return False
     if not np.isfinite(diagnostics.psr):
         return True
-    threshold = config.PSR_ACCEPT_THRESHOLD if tier == "fast" else config.PSR_AMBIGUOUS_THRESHOLD
-    return bool(diagnostics.psr < threshold)
+    return bool(diagnostics.psr < config.get_thresholds().for_tier(tier))
 
 
 def _run_pipeline(

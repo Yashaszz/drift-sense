@@ -209,7 +209,7 @@ def is_low_confidence(
         # False for NaN, which would clear the flag exactly when there is no
         # evidence to clear it with.
         return True
-    if diagnostics.psr < config.PSR_AMBIGUOUS_THRESHOLD:
+    if diagnostics.psr < config.get_thresholds().psr_ambiguous:
         return True
     return confidence < threshold
 
