@@ -19,7 +19,7 @@ import numpy as np
 
 from src import config, matcher
 from src.evaluate import load_cases, load_image
-from src.localize import _StageCache
+from src.localize import _resolve_pose, _StageCache
 from src.types import FloatArray
 
 DEFAULT_K_VALUES = (1, 5, 10, 30)
@@ -28,19 +28,8 @@ DEFAULT_RADII = (2, 4, 8, 16)
 
 def _pose_for(search: FloatArray, reference: FloatArray) -> tuple[float, float]:
     """Rotation and scale for the fast tier, matching the real pipeline."""
-    try:
-        from src.localize import _resolve_pose
-    except ImportError:
-        return 0.0, float(config.NOMINAL_SCALE)
-    try:
-        pose = _resolve_pose(search, reference, "fast")
-    except Exception:  # noqa: BLE001 - fall back to nominal, never abort
-        return 0.0, float(config.NOMINAL_SCALE)
-    theta = getattr(pose, "theta_deg", None)
-    if theta is None:
-        theta = getattr(pose, "theta", 0.0)
-    scale = getattr(pose, "scale", config.NOMINAL_SCALE)
-    return float(theta), float(scale)
+    pose = _resolve_pose(search, reference, "fast")
+    return float(pose.theta_deg), float(pose.scale)
 
 
 def _rank_of_hit(
