@@ -1,9 +1,14 @@
-"""T6 (partial) — escalation ladder, PSR wiring, and NaN handling.
+"""T6 — escalation ladder, PSR wiring, and NaN handling.
 
-Covers the parts of T6 that do not depend on ``disambiguate.select_candidate``.
-The centre tie-break and the tied-count remain unwired because that function's
-tie-break compares candidate top-left corners against the search-image centre
-rather than candidate centres; see ``test_r3_tie_break_bug`` below.
+Covers the Fast -> Robust -> Ambiguous orchestration, the peak-to-sidelobe
+statistic feeding the escalation decision, and the NaN handling that keeps an
+unmeasurable ambiguity from reading as an unambiguous one.
+
+The first two tests guard the mandated centre tie-break. They were written while
+``select_candidate`` compared candidate top-left corners against the search-image
+centre rather than candidate centres, which was wrong by half a template. R3
+fixed that in commit b07667a; the tests remain because the failure was silent —
+``tie_break_used`` still reported True — and a regression would be too.
 """
 
 import math
@@ -18,15 +23,16 @@ from src.localize import _escalation_path, _should_escalate, localize
 from src.types import Diagnostics, Peak
 
 # ---------------------------------------------------------------------------
-# The blocker: R3's centre tie-break
+# The mandated centre tie-break
 # ---------------------------------------------------------------------------
 
 
-def test_r3_tie_break_bug():
+def test_tie_break_compares_centres_not_corners():
     """The mandated rule picks the candidate whose *centre* is nearest.
 
     Two peaks with identical scores. A's matched region is 14 px from the image
-    centre; B's is 99 px away. The rule requires A.
+    centre; B's is 99 px away. The rule requires A. Comparing top-left corners
+    instead selects B, which is what this originally caught.
     """
     template_shape = (100, 100)
     centre = config.image_centre((1000, 1000))
@@ -42,7 +48,7 @@ def test_r3_tie_break_bug():
 
 
 def test_tie_break_offset_is_half_a_template():
-    """Documents the size of the error so the fix can be checked against it."""
+    """Records the size of the error the corner-versus-centre confusion caused."""
     template_shape = (100, 100)
     centre_x, centre_y = config.image_centre((1000, 1000))
     offset = (template_shape[1] - 1) / 2
