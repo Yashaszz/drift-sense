@@ -174,23 +174,53 @@ versus lattice pitch. They must not be recoupled when R1 randomises pitch.
 
 ---
 
-## 9. Phase status (as of Aug 11)
+## 9. Phase status (as of Aug 11, late)
 
-Phases 0, 1, 2 complete for R3. Phase 4's `failure_analysis.md` written early.
+Phases 0, 1, 2 complete for R3. Phase 3 build work complete. Phase 4's
+`failure_analysis.md` written early but its figures predate the ablation.
 
-**Open on R3's plate, not blocked:**
-1. **recall@K** — the Aug 11 gate reads "recall@K and top-1 measured separately".
-   Top-1 is measured; `evaluate.py` still prints `NOTE: top-1 only. recall@K needs
-   the pre-disambiguation candidate list — see recall_at_k_pass()`. recall@K is
-   R4's number but R3's harness has to produce it. Gate is not closed until it does.
-2. **`baseline_ncc.py`** — Phase 1 deliverable, never confirmed to exist. The
-   incumbent to beat. Phase 3's baseline-vs-ours table and Phase 5's results slide
-   both depend on it.
-3. **Ablations** (Phase 3, Aug 12–13) — what each stage actually buys. Stage 4a now
-   has a clean before/after (0.778 → 0.833 anchored) to build the rest on.
-4. **Confidence-vs-accuracy calibration plot** (Phase 3).
+**Done tonight, PR #14 (`r3-recall-baseline`), open against `main`:**
+1. **recall@K** — `src/recall.py`. Reuses `_StageCache` so pose, template and
+   PSF match `localize()`. Sweeps weighted on/off and `nms_radius` 2-16.
+   Anchored weighted r@1 0.796, r@30 0.833. Top-1 accuracy is 0.833, so
+   **top-1-given-recall is 1.000** — selection loses nothing once truth is in
+   the list. Unweighted anchored r@30 is 0.759: on periodic references truth
+   is absent from all 30 candidates, so weighting changes what the surface
+   contains rather than reranking it. Recall is flat across every NMS radius
+   tested, so the suppression concern in the original stub does not hold.
+   Aug 11 gate is closed.
+2. **`baseline_ncc.py`** — exists. Single-scale ZNCC at nominal 10x, argmax,
+   no pose / weighting / disambiguation / sub-pixel. Anchored 0.704 at
+   0.450 px median, 170 ms.
+3. **Ablations** — `src/ablate.py`, anchored stratum:
 
-**Blocked on R2:** `docs/citations.md` compile + audit (R1/R2 write entries beside
-their own numbers). Re-measuring every figure once `apply_sem_chain` is real.
+   | stage | acc | median err | ms |
+   |---|---|---|---|
+   | ncc | 0.704 | 0.450 | 56 |
+   | + weighting | 0.796 | 0.450 | 272 |
+   | + selection | 0.796 | 0.450 | 277 |
+   | + sub-pixel (full) | 0.833 | 0.028 | 351 |
+
+   Weighting is the entire disambiguation gain (+0.092). **Selection buys
+   exactly 0.000** — with `TIE_SIGMA = 0.0` the tolerance is always zero,
+   `n_tied` always 1, and `select_candidate` returns `peaks[0]` unchanged.
+   The tie-break is mandated and fires correctly when ties exist; on this
+   dataset exact ties never occur. Sub-pixel buys +0.037 and a 16x error
+   reduction; 0.450 px is the integer-peak quantisation floor.
+
+Every row cross-checks against an independent code path.
+
+**Blocked on R4:** confidence-vs-accuracy calibration plot — needs the
+calibrator re-fit now that `uniqueness_score` populates (it was at chance
+when `uniqueness_score` was NaN). Also asked for `refine: bool = True` on
+`localize()` so the sub-pixel ablation row comes from the same harness as
+the other three instead of from `uniqueness_on.csv`.
+
+**Blocked on R2:** `docs/citations.md` compile + audit. Re-measuring every
+figure once `apply_sem_chain` is real.
+
+**Parked, not dropped:** `src/disambiguate.py`'s module docstring still says
+`uniqueness_map` returns uniform weights and `select_candidate` returns the
+strongest peak. Both stale since PR #13.
 
 **Hard date:** Aug 13 is feature freeze. Aug 15 deck + zip + clean-machine test.
