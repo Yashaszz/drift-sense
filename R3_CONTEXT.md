@@ -171,3 +171,26 @@ versus lattice pitch. They must not be recoupled when R1 randomises pitch.
   `dataset_manifest.json`). `dataset/` is gitignored and empty. R1's zip is the
   single source — identical ground truth does not imply identical renders
   across Mac and WSL.
+
+---
+
+## 9. Phase status (as of Aug 11)
+
+Phases 0, 1, 2 complete for R3. Phase 4's `failure_analysis.md` written early.
+
+**Open on R3's plate, not blocked:**
+1. **recall@K** — the Aug 11 gate reads "recall@K and top-1 measured separately".
+   Top-1 is measured; `evaluate.py` still prints `NOTE: top-1 only. recall@K needs
+   the pre-disambiguation candidate list — see recall_at_k_pass()`. recall@K is
+   R4's number but R3's harness has to produce it. Gate is not closed until it does.
+2. **`baseline_ncc.py`** — Phase 1 deliverable, never confirmed to exist. The
+   incumbent to beat. Phase 3's baseline-vs-ours table and Phase 5's results slide
+   both depend on it.
+3. **Ablations** (Phase 3, Aug 12–13) — what each stage actually buys. Stage 4a now
+   has a clean before/after (0.778 → 0.833 anchored) to build the rest on.
+4. **Confidence-vs-accuracy calibration plot** (Phase 3).
+
+**Blocked on R2:** `docs/citations.md` compile + audit (R1/R2 write entries beside
+their own numbers). Re-measuring every figure once `apply_sem_chain` is real.
+
+**Hard date:** Aug 13 is feature freeze. Aug 15 deck + zip + clean-machine test.
