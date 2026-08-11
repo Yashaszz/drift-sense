@@ -15,6 +15,7 @@ from src.generate_dataset import (
     MANIFEST_NAME,
     NOISE_LEVELS,
     OUT_SIZE,
+    OVERLAY_BIAS_TOLERANCE_PX,
     POSE_RANGES,
     _sample_layout,
     build_dataset,
@@ -22,6 +23,7 @@ from src.generate_dataset import (
     expected_pair_count,
     file_tree_hash,
     image_tree_hash,
+    overlay_check,
     validate_record,
     verify_dataset,
 )
@@ -476,3 +478,53 @@ def test_pixel_hash_still_catches_a_changed_pixel(tiny_dataset):
     pixels[0, 0] = np.uint8((int(pixels[0, 0]) + 1) % 256)
     Image.fromarray(pixels).save(path)
     assert image_tree_hash(tiny_dataset) != before
+
+
+# ---------------------------------------------------------------------------
+# Overlay verification
+# ---------------------------------------------------------------------------
+
+
+def _mean_offset(results):
+    return (
+        float(np.mean([r.dx for r in results])),
+        float(np.mean([r.dy for r in results])),
+    )
+
+
+def test_overlay_finds_no_bias_in_a_good_dataset(tiny_dataset):
+    """The published ground truth must fit better than any nearby offset.
+
+    This uses only the search image and the ground-truth record -- never the
+    layout generator -- so it validates against an external consumer rather than
+    checking the code agrees with itself.
+    """
+    mean_dx, mean_dy = _mean_offset(overlay_check(tiny_dataset, sample=0))
+    assert abs(mean_dx) <= OVERLAY_BIAS_TOLERANCE_PX
+    assert abs(mean_dy) <= OVERLAY_BIAS_TOLERANCE_PX
+
+
+@pytest.mark.parametrize("planted_px", [0.5, -0.5])
+def test_overlay_detects_a_planted_offset(tiny_dataset, planted_px):
+    """The check must fail on the exact defect it exists to catch.
+
+    An earlier revision published every ground truth 0.5 px off in both axes.
+    A test that cannot detect that reintroduced would be decoration.
+    """
+    import json
+
+    path = tiny_dataset / "ground_truth.jsonl"
+    shifted = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        record["ground_truth"]["x"] += planted_px / record["ground_truth"]["scale"]
+        record["ground_truth"]["y"] += planted_px / record["ground_truth"]["scale"]
+        shifted.append(json.dumps(record))
+    path.write_text("\n".join(shifted) + "\n")
+
+    mean_dx, mean_dy = _mean_offset(overlay_check(tiny_dataset, sample=0))
+    assert abs(mean_dx) > OVERLAY_BIAS_TOLERANCE_PX
+    assert abs(mean_dy) > OVERLAY_BIAS_TOLERANCE_PX
+    assert np.sign(mean_dx) == -np.sign(planted_px)

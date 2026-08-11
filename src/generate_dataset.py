@@ -20,7 +20,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from PIL import Image
@@ -32,6 +32,7 @@ from src.render import (
     GroundTruth,
     PairPlan,
     plan_pair,
+    reconstruct_from_gt,
     render_pair,
 )
 from src.types import FloatArray
@@ -40,7 +41,9 @@ __all__ = [
     "MANIFEST_NAME",
     "PairRecord",
     "build_dataset",
+    "OverlayResult",
     "image_tree_hash",
+    "overlay_check",
     "main",
     "validate_record",
     "verify_dataset",
@@ -50,6 +53,27 @@ MANIFEST_NAME: str = "dataset_manifest.json"
 """Filename of the manifest written alongside the images."""
 
 MANIFEST_SCHEMA_VERSION: int = 2
+
+OVERLAY_BIAS_TOLERANCE_PX: float = 0.2
+"""Largest *mean* preferred offset the overlay check tolerates.
+
+The mean, not the worst pair. A ground-truth defect is systematic -- the +0.5 px
+base error an earlier revision shipped would have pushed every pair the same way
+-- whereas probing at 0.25 px granularity on an image rebuilt from a 10x coarser
+capture is noisy, and individual pairs land on neighbouring offsets by chance.
+Judging the worst pair fails on correct data; judging the mean asks the question
+that actually separates a defect from noise.
+
+Set from the measured noise floor rather than picked. On a known-good dataset
+the mean lands within about 0.10 px of zero (12 pairs, 0.25 px granularity, so a
+standard error near 0.08); a planted 0.5 px offset reads back as roughly -0.46.
+0.2 sits cleanly between them.
+
+One observation worth keeping: the mean ``dy`` runs slightly negative across
+runs (-0.08 to -0.10) while ``dx`` sits at zero. That is inside the noise for
+this sample size, but it is consistently signed, so it is worth re-checking with
+a larger sample rather than assuming it is nothing.
+"""
 """Bumped when the manifest gains or loses a field."""
 
 DEFAULT_SEED: int = 20260807
@@ -817,6 +841,176 @@ def compare_manifests(mine: dict[str, Any], theirs: dict[str, Any]) -> str:
     return "identical"
 
 
+# ===========================================================================
+# Overlay verification
+# ===========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class OverlayResult:
+    """Outcome of rebuilding one reference from its published ground truth.
+
+    Attributes
+    ----------
+    pair_id
+        Which pair this is.
+    mean_abs_error
+        Mean absolute intensity difference in ``[0, 1]``.
+    dx
+        Residual horizontal shift in reference pixels.
+    dy
+        Residual vertical shift in reference pixels.
+    """
+
+    pair_id: str
+    mean_abs_error: float
+    dx: float
+    dy: float
+
+
+PROBE_OFFSETS_PX: tuple[float, ...] = (-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0)
+"""Offsets probed either side of the published ground truth, in reference px."""
+
+
+def _best_offset(
+    reference: FloatArray,
+    search: FloatArray,
+    truth: GroundTruth,
+    *,
+    out_size: int,
+) -> tuple[float, float]:
+    """Find the offset from the published ground truth that fits the data best.
+
+    Parameters
+    ----------
+    reference
+        The published reference image.
+    search
+        The published search image.
+    truth
+        The published ground truth for this pair.
+    out_size
+        Image edge length in pixels.
+
+    Returns
+    -------
+    tuple of float
+        ``(dx, dy)`` in reference pixels. ``(0, 0)`` means the published answer
+        explains the data better than any nearby alternative.
+
+    Notes
+    -----
+    Phase correlation is the obvious tool and the wrong one here. The rebuilt
+    image is a 10x upsample of the search capture, so it carries almost no
+    high-frequency content, and phase correlation's whitening then amplifies
+    noise into a broad ambiguous peak -- it reported hundreds of pixels of drift
+    on data that is provably correct, because a periodic lattice puts an equally
+    strong peak at every lattice vector.
+
+    Asking directly is both cheaper and harder to fool: rebuild at a few offsets
+    around the published position and see which fits best. Axis-separable, so it
+    costs 2n rebuilds rather than n squared.
+    """
+
+    def error_at(dx: float, dy: float) -> float:
+        shifted = GroundTruth(
+            x=truth.x + dx / truth.scale,
+            y=truth.y + dy / truth.scale,
+            rotation_deg=truth.rotation_deg,
+            scale=truth.scale,
+        )
+        rebuilt = reconstruct_from_gt(search, shifted, out_size=out_size)
+        return float(np.abs(reference - rebuilt).mean())
+
+    best_dx = min(PROBE_OFFSETS_PX, key=lambda d: error_at(d, 0.0))
+    best_dy = min(PROBE_OFFSETS_PX, key=lambda d: error_at(0.0, d))
+    return best_dx, best_dy
+
+
+def overlay_check(
+    output_dir: Path,
+    *,
+    sample: int = 8,
+    seed: int = 0,
+    out_size: int = OUT_SIZE,
+) -> list[OverlayResult]:
+    """Rebuild sampled references from published artefacts alone and compare.
+
+    Parameters
+    ----------
+    output_dir
+        Dataset root.
+    sample
+        How many pairs to check. ``0`` checks every pair.
+    seed
+        Seed for choosing the sample.
+    out_size
+        Image edge length in pixels.
+
+    Returns
+    -------
+    list of OverlayResult
+        One result per checked pair.
+
+    Notes
+    -----
+    This is the strongest check available on the coordinate convention, because
+    it touches **only** the search image and the ground-truth record -- never the
+    layout generator. A convention that is merely self-consistent passes every
+    internal check and fails this one, which is exactly how a constant +0.5 px
+    error survived in an earlier revision.
+
+    Worth re-running after any change to the randomisation ranges: wider ranges
+    reach parameter combinations the previous dataset never covered.
+    """
+    records = [
+        json.loads(line)
+        for line in (output_dir / "ground_truth.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rng = np.random.default_rng(seed)
+    if sample <= 0:
+        chosen = records
+    else:
+        picked = rng.choice(len(records), size=min(sample, len(records)), replace=False)
+        chosen = [records[int(i)] for i in picked]
+
+    results: list[OverlayResult] = []
+    for record in chosen:
+        reference = _load_png(output_dir / record["reference_path"])
+        search = _load_png(output_dir / record["search_path"])
+        truth = GroundTruth(**record["ground_truth"])
+        rebuilt = reconstruct_from_gt(search, truth, out_size=out_size)
+        dx, dy = _best_offset(reference, search, truth, out_size=out_size)
+        results.append(
+            OverlayResult(
+                pair_id=record["pair_id"],
+                mean_abs_error=float(np.abs(reference - rebuilt).mean()),
+                dx=dx,
+                dy=dy,
+            )
+        )
+    return results
+
+
+def _load_png(path: Path) -> FloatArray:
+    """Read an 8-bit PNG as a ``[0, 1]`` float32 image.
+
+    Parameters
+    ----------
+    path
+        Image file.
+
+    Returns
+    -------
+    FloatArray
+        Image in ``[0, 1]``.
+    """
+    with Image.open(path) as handle:
+        pixels = np.asarray(handle, dtype=np.float32)
+    return cast(FloatArray, pixels / np.float32(255.0))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Generate the dataset from the command line.
 
@@ -839,11 +1033,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--supersample", type=int, default=DEFAULT_SUPERSAMPLE)
     parser.add_argument(
+        "--overlay-check",
+        type=int,
+        default=0,
+        metavar="N",
+        help="rebuild N sampled references from search image + ground truth and report drift",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="check an existing dataset against its manifest instead of generating",
     )
     args = parser.parse_args(argv)
+
+    if args.overlay_check:
+        results = overlay_check(args.output_dir, sample=args.overlay_check)
+        for result in results:
+            print(
+                f"  {result.pair_id:44s} mean|err| {result.mean_abs_error:.4f}  "
+                f"best offset ({result.dx:+.2f}, {result.dy:+.2f}) px"
+            )
+        mean_dx = float(np.mean([r.dx for r in results]))
+        mean_dy = float(np.mean([r.dy for r in results]))
+        bias = max(abs(mean_dx), abs(mean_dy))
+        print(
+            f"\nmean preferred offset: ({mean_dx:+.3f}, {mean_dy:+.3f}) px "
+            f"over {len(results)} pairs"
+        )
+        if bias > OVERLAY_BIAS_TOLERANCE_PX:
+            print(
+                f"FAILED: systematic bias of {bias:.3f} px -- the published ground truth is offset"
+            )
+            return 1
+        print("OK: no systematic offset; the published ground truth fits best")
+        return 0
 
     if args.verify:
         try:
