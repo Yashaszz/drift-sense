@@ -115,12 +115,46 @@ PSR_ACCEPT_THRESHOLD: Final[float] = 8.0
 PSR_AMBIGUOUS_THRESHOLD: Final[float] = 4.0
 """Peak-to-sidelobe ratio below which the result is treated as ambiguous."""
 
-TIE_SIGMA: Final[float] = 1.0
-"""Tie width in sidelobe standard deviations.
+TIE_SIGMA: Final[float] = 0.0
+"""Tie width, in units of the statistic the call site converts from.
 
-Candidates scoring within this many sigma of the maximum are 'statistically
-tied' and go to the mandated centre tie-break. Deliberately *not* 'every local
-maximum' — that would hand the tie-break far more cases than it should decide.
+Zero means *exact ties only*: a candidate goes to the mandated centre tie-break
+only when its score equals the maximum bit for bit.
+
+That is deliberately conservative, and it was chosen from measurement. The call
+site converts this into score units by multiplying by the sidelobe standard
+deviation, and on a periodic layout that deviation is around 0.29 because the
+sidelobe region spans nearly the whole correlation range. Meanwhile the top
+thirty candidates are separated by roughly 0.025 in total. A width of one
+sidelobe sigma therefore declared *every* candidate tied and handed the answer
+to the centre rule, discarding a peak standing clearly above the rest.
+
+Measured over 108 generated pairs:
+
+    tie width   accuracy @ 1 px   median candidates tied
+    0.000            35.2%                  1
+    0.002            32.4%                 30
+    0.010            25.0%                 30
+    0.291             3.7%                 30   <- one sidelobe sigma
+
+The handbook specifies ties as "within roughly one *noise* sigma of the
+maximum". Noise sigma and sidelobe sigma are different quantities: the first is
+the scale of random fluctuation between neighbouring candidates, the second is
+the spread of the entire surface. Conflating them is what cost the accuracy
+above.
+
+Zero is therefore a floor, not the final answer. The proper fix is to estimate
+the local fluctuation scale among the top candidates and express the tie width
+in that, which restores the mandated tie-break to the cases it was meant for
+instead of disabling it in practice. Until then, exact ties only.
+"""
+
+CONFIDENCE_MODEL_PATH: Final[str] = "models/confidence.json"
+"""Where a fitted Stage 6 calibrator is looked for, relative to the repo root.
+
+Absence is normal and must stay harmless: the deliverable has to run from a
+clean unzip with no trained artefacts, so a missing file falls back to the
+heuristic rather than failing.
 """
 
 # ---------------------------------------------------------------------------

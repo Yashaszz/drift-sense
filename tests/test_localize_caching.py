@@ -111,7 +111,6 @@ def test_outcome_round_trips(cache):
         theta_est=0.0,
         scale_est=10.0,
         psr=4.2,
-        uniqueness_score=0.5,
         subpixel_error=0.01,
         subpixel_method="phase_cross_correlation",
     )
@@ -130,7 +129,6 @@ def test_outcome_apply_populates_every_field_but_mode():
         theta_est=1.5,
         scale_est=10.2,
         psr=3.3,
-        uniqueness_score=0.75,
         subpixel_error=0.02,
         subpixel_method="surface_upsampling",
     )
@@ -138,7 +136,6 @@ def test_outcome_apply_populates_every_field_but_mode():
     assert diagnostics.n_tied == 7
     assert diagnostics.tie_break_used is True
     assert diagnostics.psr == 3.3
-    assert diagnostics.uniqueness_score == 0.75
     assert diagnostics.subpixel_method == "surface_upsampling"
     assert diagnostics.mode_used == "ambiguous"
 

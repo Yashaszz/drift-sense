@@ -25,9 +25,26 @@ fitted model is present, :class:`ConfidenceModel` falls back to
 
 Status
 ------
-T0 skeleton. The interface is final; the fitted logistic model lands in T7.
-:meth:`ConfidenceModel.predict` currently delegates to the heuristic in both
-the fitted and unfitted cases.
+Fitted, serialised and wired (T7). On the current data it does **not**
+discriminate: cross-validated AUC is 0.504 over 108 pairs, which is chance.
+
+That is a data problem, not a model problem. Four of the six features are
+constant because the diagnostics feeding them are still stubs: ``n_tied`` and
+the pose residuals never vary, and ``uniqueness_score`` is a constant while R3's
+map returns ones. Only ``psr`` (AUC 0.606) and ``ncc_peak`` (0.540) carry
+anything at all.
+
+The signal that would work is known and measured. Accuracy splits 77.8% on
+anchored references against 0.0% on unanchored ones, and ``uniqueness_score`` is
+precisely the feature designed to capture that. Substituting a working map in
+the counterfactual takes cross-validated AUC from 0.506 to **0.926**.
+
+So no fitted model ships. ``localize`` falls back to the conservative heuristic,
+which is honest about knowing little, rather than to a calibrator that would
+look authoritative at chance level - the handbook is explicit that a decorative
+confidence earns nothing. ``benchmarks/fit_confidence.py`` produces a real model
+the moment the upstream stubs land, and dropping the file at
+``config.CONFIDENCE_MODEL_PATH`` activates it with no code change.
 """
 
 import json
@@ -38,6 +55,15 @@ import numpy as np
 
 from src import config
 from src.types import Diagnostics, Float64Array
+
+_HEURISTIC_SCALE: float = 2.0
+"""Width of the heuristic logistic, in PSR units."""
+
+_MIN_FEATURE_SPREAD: float = 1e-9
+"""Standard deviation below which a feature is treated as constant."""
+
+_DEFAULT_THRESHOLD: float = 0.5
+"""Decision threshold used until one is calibrated from data."""
 
 __all__ = [
     "FEATURE_NAMES",
@@ -131,15 +157,26 @@ def heuristic_confidence(diagnostics: Diagnostics) -> float:
 
     Notes
     -----
-    T0 returns ``0.0`` unconditionally, which is honest: nothing has been
-    calibrated, so nothing is trusted. A monotone function of the
-    peak-to-sidelobe ratio and the correlation peak replaces this in T7.
+    A logistic in the peak-to-sidelobe ratio, centred on the acceptance
+    threshold: it crosses 0.5 exactly where the escalation logic stops
+    escalating, so the two agree by construction rather than by coincidence.
+
+    Deliberately a function of PSR alone. On the current data PSR is the only
+    diagnostic carrying meaningful signal, and a heuristic that pretended to
+    weigh several would imply a confidence it cannot support. A non-finite PSR
+    means the ambiguity could not be measured, which scores zero.
     """
-    del diagnostics  # placeholder: monotone scoring lands in T7
-    return 0.0
+    if not np.isfinite(diagnostics.psr):
+        return 0.0
+    centred = (diagnostics.psr - config.PSR_ACCEPT_THRESHOLD) / _HEURISTIC_SCALE
+    return float(1.0 / (1.0 + np.exp(-centred)))
 
 
-def is_low_confidence(confidence: float, diagnostics: Diagnostics) -> bool:
+def is_low_confidence(
+    confidence: float,
+    diagnostics: Diagnostics,
+    threshold: float = _DEFAULT_THRESHOLD,
+) -> bool:
     """Decide whether the tool should escalate rather than trust this answer.
 
     Parameters
@@ -148,6 +185,10 @@ def is_low_confidence(confidence: float, diagnostics: Diagnostics) -> bool:
         Calibrated confidence in ``[0, 1]``.
     diagnostics
         Evidence gathered during localization.
+    threshold
+        Confidence below which the answer is not trusted. Comes from the fitted
+        model when one is available, so the decision point is calibrated rather
+        than assumed.
 
     Returns
     -------
@@ -170,7 +211,7 @@ def is_low_confidence(confidence: float, diagnostics: Diagnostics) -> bool:
         return True
     if diagnostics.psr < config.PSR_AMBIGUOUS_THRESHOLD:
         return True
-    return confidence < 0.5
+    return confidence < threshold
 
 
 class ConfidenceModel:
@@ -197,13 +238,20 @@ class ConfidenceModel:
     True
     """
 
-    FORMAT_VERSION: int = 1
-    """Serialisation version, written into the model file."""
+    FORMAT_VERSION: int = 2
+    """Serialisation version, written into the model file.
+
+    Version 2 adds the feature standardisation and the decision threshold, both
+    of which are fitted quantities and meaningless to infer without.
+    """
 
     def __init__(
         self,
         coefficients: tuple[float, ...] | None = None,
         intercept: float = 0.0,
+        centre: tuple[float, ...] | None = None,
+        spread: tuple[float, ...] | None = None,
+        threshold: float = _DEFAULT_THRESHOLD,
     ) -> None:
         """Construct a calibrator, optionally from known coefficients.
 
@@ -228,6 +276,9 @@ class ConfidenceModel:
             raise ValueError(msg)
         self.coefficients = coefficients
         self.intercept = intercept
+        self.centre = centre
+        self.spread = spread
+        self.threshold = threshold
 
     @property
     def is_fitted(self) -> bool:
@@ -277,6 +328,31 @@ class ConfidenceModel:
                 f"{features.shape[0]} vs {correct.shape[0]}"
             )
             raise ValueError(msg)
+
+        from sklearn.linear_model import LogisticRegression
+
+        clean = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+        centre = clean.mean(axis=0)
+        spread = clean.std(axis=0)
+        # A feature with no variance carries no information and would otherwise
+        # divide by zero. Several are constant today because the diagnostics
+        # feeding them are still stubs upstream.
+        spread = np.where(spread < _MIN_FEATURE_SPREAD, 1.0, spread)
+
+        # `penalty` is deprecated from scikit-learn 1.8; C alone selects the same
+        # L2 regularisation and keeps the call forward-compatible.
+        estimator = LogisticRegression(
+            C=1.0,
+            solver="lbfgs",
+            max_iter=1000,
+            random_state=0,
+        )
+        estimator.fit((clean - centre) / spread, correct.astype(int))
+
+        self.coefficients = tuple(float(c) for c in estimator.coef_[0])
+        self.intercept = float(estimator.intercept_[0])
+        self.centre = tuple(float(c) for c in centre)
+        self.spread = tuple(float(s) for s in spread)
         return self
 
     def predict(self, diagnostics: Diagnostics) -> float:
@@ -293,7 +369,15 @@ class ConfidenceModel:
             Confidence in ``[0, 1]``. Never raises: an unfitted model falls back
             to :func:`heuristic_confidence`.
         """
-        return heuristic_confidence(diagnostics)
+        if not self.is_fitted or self.centre is None or self.spread is None:
+            return heuristic_confidence(diagnostics)
+
+        assert self.coefficients is not None  # noqa: S101 - narrowed by is_fitted
+        standardised = (extract_features(diagnostics) - np.asarray(self.centre)) / np.asarray(
+            self.spread
+        )
+        logit = float(np.dot(standardised, np.asarray(self.coefficients))) + self.intercept
+        return float(np.clip(1.0 / (1.0 + np.exp(-logit)), 0.0, 1.0))
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable view of this model.
@@ -310,6 +394,9 @@ class ConfidenceModel:
             "feature_names": list(FEATURE_NAMES),
             "coefficients": None if self.coefficients is None else list(self.coefficients),
             "intercept": self.intercept,
+            "centre": None if self.centre is None else list(self.centre),
+            "spread": None if self.spread is None else list(self.spread),
+            "threshold": self.threshold,
         }
 
     def save(self, path: Path) -> None:
@@ -355,9 +442,14 @@ class ConfidenceModel:
             )
             raise ValueError(msg)
         coefficients = payload.get("coefficients")
+        centre = payload.get("centre")
+        spread = payload.get("spread")
         return cls(
             coefficients=None if coefficients is None else tuple(coefficients),
             intercept=float(payload.get("intercept", 0.0)),
+            centre=None if centre is None else tuple(centre),
+            spread=None if spread is None else tuple(spread),
+            threshold=float(payload.get("threshold", _DEFAULT_THRESHOLD)),
         )
 
     @classmethod

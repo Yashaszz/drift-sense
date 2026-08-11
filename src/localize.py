@@ -44,6 +44,7 @@ import argparse
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TypeAlias
 
@@ -98,7 +99,6 @@ class _TierOutcome:
     theta_est: float
     scale_est: float
     psr: float
-    uniqueness_score: float
     subpixel_error: float
     subpixel_method: str
 
@@ -123,10 +123,29 @@ class _TierOutcome:
         diagnostics.theta_est = self.theta_est
         diagnostics.scale_est = self.scale_est
         diagnostics.psr = self.psr
-        diagnostics.uniqueness_score = self.uniqueness_score
         diagnostics.subpixel_error = self.subpixel_error
         diagnostics.subpixel_method = self.subpixel_method
         return self.centre
+
+
+@lru_cache(maxsize=1)
+def _confidence_model() -> ConfidenceModel:
+    """Return the fitted Stage 6 calibrator, or an unfitted fallback.
+
+    Returns
+    -------
+    ConfidenceModel
+        A fitted model when ``config.CONFIDENCE_MODEL_PATH`` exists and parses,
+        otherwise an unfitted one that scores by heuristic.
+
+    Notes
+    -----
+    Cached because it is read from disk and never changes within a process. A
+    missing file is the normal case, not an error: the deliverable must run
+    from a clean unzip with no trained artefacts.
+    """
+    candidate = Path(config.CONFIDENCE_MODEL_PATH)
+    return ConfidenceModel.load_or_default(candidate if candidate.is_file() else None)
 
 
 class _StageCache:
@@ -604,6 +623,15 @@ def _run_pipeline(
     # they produce the same surface.
     effective_weighting = weighted and cache.uniqueness_is_informative()
 
+    if weighted:
+        # Set before the cache lookup, and outside the cached outcome, because
+        # this is evidence about the *reference* rather than about the tier: it
+        # answers "is there an anchor at all?". Two tiers can legitimately share
+        # a correlation surface while only the later one has scored the
+        # reference, so folding it into the outcome would report zero for a map
+        # that was in fact computed.
+        diagnostics.uniqueness_score = float(np.mean(cache.uniqueness(), dtype=np.float64))
+
     key = (pose_estimate.theta_deg, pose_estimate.scale, psf_sigma, effective_weighting)
     cached = cache.outcome(key)
     if cached is not None:
@@ -639,11 +667,6 @@ def _run_pipeline(
     diagnostics.ncc_peak = best.score
     diagnostics.theta_est = pose_estimate.theta_deg
     diagnostics.scale_est = pose_estimate.scale
-    if weighted:
-        # Reported whenever the map was computed, not only when the weighting
-        # engaged. "Is there an anchor at all?" is evidence about the reference
-        # and is worth knowing even on a map too flat to be worth applying.
-        diagnostics.uniqueness_score = float(np.mean(cache.uniqueness(), dtype=np.float64))
     # The sidelobe statistics around peaks[0] are already in hand. When the
     # tie-break did not move the selection - the common case - the excluded
     # region is identical, so the ratio follows directly. Re-scanning cost 24 ms
@@ -674,7 +697,6 @@ def _run_pipeline(
         theta_est=pose_estimate.theta_deg,
         scale_est=pose_estimate.scale,
         psr=diagnostics.psr,
-        uniqueness_score=diagnostics.uniqueness_score,
         subpixel_error=refinement.error,
         subpixel_method=refinement.method,
     )
@@ -791,14 +813,14 @@ def localize(
             if not _should_escalate(diagnostics, tier):
                 break
 
-        model = ConfidenceModel.load_or_default(None)
+        model = _confidence_model()
         confidence = float(np.clip(model.predict(diagnostics), 0.0, 1.0))
 
         result = LocalizationResult(
             x=float(centre_x),
             y=float(centre_y),
             confidence=confidence,
-            low_confidence_flag=is_low_confidence(confidence, diagnostics),
+            low_confidence_flag=is_low_confidence(confidence, diagnostics, model.threshold),
             diagnostics=diagnostics,
         )
     except _NoCandidatesError as exc:
