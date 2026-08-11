@@ -44,9 +44,11 @@ import numpy as np
 
 from src import config
 from src.types import FloatArray, Peak
+from src.uniqueness import uniqueness_map, uniqueness_score
 
 __all__ = [
     "peak_to_sidelobe",
+    "uniqueness_score",
     "select_candidate",
     "sidelobe_stats",
     "tied_candidates",
@@ -54,48 +56,10 @@ __all__ = [
 ]
 
 
-def uniqueness_map(
-    reference: FloatArray,
-    tile: int = config.DEFAULT_UNIQUENESS_TILE_PX,
-) -> FloatArray:
-    """Score how uniquely each region of the reference identifies a position.
-
-    Tiles the reference and scores each tile by how sharply it autocorrelates —
-    via the peak-to-sidelobe ratio of its own autocorrelation, or equivalently
-    its spectral flatness. Periodic tiles have tall sidelobes and peaky spectra;
-    aperiodic tiles do not.
-
-    Parameters
-    ----------
-    reference
-        Reference image at 1 nm/px, as ``(rows, cols)``.
-    tile
-        Tile edge length in reference pixels.
-
-    Returns
-    -------
-    FloatArray
-        Weight map at **reference resolution**, same shape as ``reference``,
-        ``float32``, with values in ``[0, 1]``.
-
-    Notes
-    -----
-    Resolution mismatch, worth stating plainly: this map is produced at
-    reference resolution but :func:`src.matcher.zncc_surface` consumes a weight
-    array shaped like the *template*, which is roughly ten times smaller. The
-    decimation belongs on R4's side, inside the Stage 2 path, so that the weight
-    goes through the same area-averaging as the image data and stays aligned
-    with it. Returning the map at reference resolution keeps that decision in
-    one place.
-    """
-    del tile  # stub: uniqueness scoring is R3's work
-    return np.ones(reference.shape, dtype=np.float32)
-
-
 def sidelobe_stats(
     surface: FloatArray,
     peak: Peak,
-    exclusion_radius: int = config.DEFAULT_NMS_RADIUS_PX,
+    exclusion_radius: int = config.PSR_EXCLUSION_RADIUS_PX,
 ) -> tuple[float, float]:
     """Return ``(mean, std)`` of the surface outside the exclusion radius.
 
@@ -109,8 +73,8 @@ def sidelobe_stats(
     :func:`peak_to_sidelobe`'s absent-measurement convention.
     """
     rows, cols = np.ogrid[: surface.shape[0], : surface.shape[1]]
-    sq_dist = (rows - peak.row) ** 2 + (cols - peak.col) ** 2
-    sidelobe = surface[sq_dist > exclusion_radius**2]
+    chebyshev = np.maximum(np.abs(rows - peak.row), np.abs(cols - peak.col))
+    sidelobe = surface[chebyshev > exclusion_radius]
 
     if sidelobe.size == 0:
         return (float("nan"), float("nan"))
@@ -143,7 +107,7 @@ def tied_candidates(peaks: list[Peak], tolerance: float) -> list[Peak]:
 def peak_to_sidelobe(
     surface: FloatArray,
     peak: Peak,
-    exclusion_radius: int = config.DEFAULT_NMS_RADIUS_PX,
+    exclusion_radius: int = config.PSR_EXCLUSION_RADIUS_PX,
 ) -> float:
     """Measure how far the winning peak stands above the correlation background.
 
