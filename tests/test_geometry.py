@@ -4,6 +4,8 @@ Every test here corresponds to a defect that reached a published dataset once.
 They are regression guards, not coverage filler.
 """
 
+import shutil
+
 import numpy as np
 import pytest
 
@@ -21,6 +23,7 @@ from src.generate_dataset import (
     OverlayResult,
     _sample_layout,
     build_dataset,
+    compare_manifests,
     count_anchors_in_reference,
     expected_pair_count,
     file_tree_hash,
@@ -393,11 +396,31 @@ def test_noise_strata_are_not_faked():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="session")
+def _tiny_dataset_master(tmp_path_factory):
+    """Build the smallest complete dataset once for the whole session.
+
+    Nine tests take this fixture, and once the noise strata landed each build
+    became 36 pairs through the real physics chain rather than 12 through a
+    passthrough -- so building per test meant rendering 324 pairs, an entire
+    dataset, before a single assertion ran. That took the suite from about a
+    minute to ten.
+
+    The tests mutate their dataset -- truncating it, re-encoding it, planting a
+    ground-truth offset -- so they cannot share one directory. They copy this
+    one instead, which costs a file copy rather than a re-render.
+    """
+    root = tmp_path_factory.mktemp("tiny_dataset_master")
+    build_dataset(root, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
+    return root
+
+
 @pytest.fixture
-def tiny_dataset(tmp_path):
-    """Generate the smallest complete dataset, for manifest tests."""
-    build_dataset(tmp_path, seeds_per_cell=1, out_size=OUT_SIZE, supersample=1)
-    return tmp_path
+def tiny_dataset(_tiny_dataset_master, tmp_path):
+    """Return a private copy of the smallest complete dataset."""
+    root = tmp_path / "dataset"
+    shutil.copytree(_tiny_dataset_master, root)
+    return root
 
 
 def test_manifest_describes_the_dataset(tiny_dataset):
@@ -437,6 +460,39 @@ def test_verify_catches_a_truncated_dataset(tiny_dataset):
     next(iter((tiny_dataset / "reference").glob("*.png"))).unlink()
     with pytest.raises(ValueError, match="image count mismatch"):
         verify_dataset(tiny_dataset)
+
+
+def _manifest(commit, image_hash, file_hash="f", pairs=324):
+    return {
+        "pair_count": pairs,
+        "generator_commit": commit,
+        "image_tree_sha256": image_hash,
+        "file_tree_sha256": file_hash,
+    }
+
+
+def test_compare_manifests_does_not_let_the_commit_mask_the_pixels():
+    """Byte-identical data must read as identical even from different commits.
+
+    ``generator_commit`` is git HEAD when the manifest was written, not a
+    fingerprint of the code that ran -- an unrelated commit mid-run moves it
+    while leaving the generator untouched. An earlier revision compared it
+    first and returned "different code", so two provably identical datasets
+    short-circuited to a false divergence before their pixels were compared.
+    """
+    verdict = compare_manifests(_manifest("aaaaaaa", "pix"), _manifest("bbbbbbb", "pix"))
+
+    assert verdict.startswith("identical")
+    assert "different code" not in verdict
+    # The commit difference is still surfaced, as context rather than a verdict.
+    assert "aaaaaaa" in verdict and "bbbbbbb" in verdict
+
+
+def test_compare_manifests_still_reports_a_real_pixel_divergence():
+    """Reordering must not blunt the check it exists to perform."""
+    verdict = compare_manifests(_manifest("aaaaaaa", "pix"), _manifest("aaaaaaa", "other"))
+
+    assert "PIXELS DIFFER" in verdict
 
 
 def test_verify_catches_a_single_changed_pixel(tiny_dataset):
