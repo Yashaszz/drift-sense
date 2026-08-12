@@ -10,15 +10,18 @@ stdout; pass `--json` where offered to capture machine-readable output.
 uv sync --all-extras
 ```
 
-Then generate a dataset. This is the only slow step — roughly four minutes for
-108 pairs, because each pair is supersampled and rendered twice.
+Then generate a dataset. This is the only slow step — roughly twenty minutes for
+the full 324 pairs, because each pair is supersampled, rendered twice and put
+through the SEM physics chain.
 
 ```bash
 uv run python -m src.generate_dataset --output-dir data --seeds-per-cell 9
 ```
 
-`--seeds-per-cell 1` gives 12 pairs in about 40 seconds and is enough to smoke
-test the scripts, though not to draw conclusions from.
+Since the noise strata landed, `--seeds-per-cell` produces
+`2 x 2 x 3 x 3 x seeds` pairs: **9 gives 324**, 3 gives 108, and 1 gives 36 in
+about two minutes, which is enough to smoke test the scripts though not to draw
+conclusions from.
 
 ## Scripts
 
@@ -47,8 +50,10 @@ Reports per-stage cost across the full escalation ladder *without* tier reuse �
 which is what makes the redundancy visible — then end-to-end `localize()`
 timings as shipped, then weighted versus unweighted correlation.
 
-Produces: the T9 profiling table, the 105 ms auto-mode median, and the 2.01x
-weighted correlation cost ratio.
+Produces: the T9 profiling table and the weighted-versus-unweighted cost ratio.
+A per-stage breakdown is also available from any `localize()` call by setting
+`config.COLLECT_STAGE_TIMINGS`, which is how the 324-pair latency table in
+`docs/r4_handoff.md` was produced.
 
 ### `fit_confidence.py` — Stage 6 calibration
 
@@ -62,12 +67,15 @@ calibrator and reports per-feature discrimination, cross-validated AUC,
 standardised coefficients, and the full threshold trade-off between false
 confidence and wasted escalation.
 
-Produces: the 0.504 cross-validated AUC, the dead-feature table, and the
-accuracy-by-anchor split.
+Produces: the cross-validated AUC, the dead-feature table, and the
+accuracy-by-anchor split. On the 324-pair physics set: **CV AUC 0.570**, with
+four of six features carrying no variance.
 
-Writing a model with `--out` is optional and currently **not recommended** — the
-model is at chance, and shipping it would replace an honest heuristic with a
-calibrator that looks authoritative. Revisit once R2 and R3 land.
+Writing a model with `--out` is optional and still **not recommended** — at CV
+AUC 0.570 the model is near chance, and shipping it would replace an honest
+heuristic with a calibrator that looks authoritative. Revisit when some
+diagnostic separates anchored from unanchored references; that signal is worth
+AUC 0.935 on its own.
 
 ### `verify_uniqueness_integration.py` — R3 readiness
 
@@ -75,12 +83,15 @@ calibrator that looks authoritative. Revisit once R2 and R3 land.
 uv run python -m benchmarks.verify_uniqueness_integration --data data
 ```
 
-Substitutes a stand-in uniqueness map for R3's stub and re-runs the whole
-pipeline, reporting accuracy and confidence AUC with and without it. The
-stand-in is a test double, not an implementation of R3's stage.
+Substitutes a stand-in uniqueness map and re-runs the whole pipeline, reporting
+accuracy and confidence AUC with and without it. The stand-in is a test double,
+not an implementation of R3's stage.
 
-Produces: the 38.9% -> 42.6% accuracy and 0.504 -> 0.828 AUC comparison, and the
-evidence that R4 needs no change when the real map lands.
+Superseded as a readiness check now that R3's map has landed — it was written to
+prove R4 would need no change when it did, and that held. It remains useful as
+an A/B harness for a *replacement* scorer: `localize`'s uniqueness cache keys on
+the implementation, so a substituted map gets its own cache entry rather than
+being served the real one's.
 
 ## Determinism
 

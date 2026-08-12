@@ -15,32 +15,121 @@ CI and packaging.
 | T4 | Stage 2 — template construction | done |
 | T5 | Stage 5 — sub-pixel refinement | done |
 | T6 | `localize()` wiring, escalation ladder | done |
-| T8 | Uniqueness-weighted correlation | done, **inert** pending R3 |
+| T8 | Uniqueness-weighted correlation | done, **live** — R3's map has landed |
 | T9 | Profiling and caching | done |
-| T7 | Stage 6 — confidence calibrator | done, **at chance** pending R2/R3 |
+| T7 | Stage 6 — confidence calibrator | done, **at chance** (CV AUC 0.570) |
+| P3 | Threshold tuning | done — swept and validated; 8.0/4.0 retained |
+| P3 | Low-confidence flag hardening | done |
+| P3 | Per-stage timing instrumentation | done, opt-in |
+| P3 | Uniqueness-map cross-call cache | done — 4.3x on a warm reference |
+| P3 | Full evaluation on 324 physics pairs | done |
 
-474 tests. Ruff, ruff-format and mypy strict all clean. CI green.
+498 tests on `main`; 571 with the Phase 3 branches. Ruff, ruff-format and mypy
+strict all clean. CI green.
 
 ## Headline numbers
 
-Measured on 108 stratified pairs, 1 px tolerance, on the hardware named in
-`r4_engineering_notes.md`.
+Measured on **324 stratified pairs carrying the full SEM physics chain**, 1 px
+tolerance, on the hardware named in `r4_engineering_notes.md`. All 324 scored,
+no load or run failures, `failure_mode: none` throughout.
 
 | | value |
 |---|---|
-| accuracy, all pairs | 38.9% |
-| accuracy, **anchored** references | **77.8%** |
+| accuracy, all pairs | 42.6% |
+| accuracy, **anchored** references | **85.2%** (138/162) |
 | accuracy, unanchored references | 0.0% |
-| auto-mode latency, median | 105 ms |
-| auto-mode latency, p95 | 146 ms |
-| sub-pixel accuracy on known shifts | 0.01 px |
+| median error, anchored | 0.042 px |
+| auto-mode latency, median / p95 | 356 ms / 363 ms |
+| `fast`-mode latency, median | 51 ms |
+| confidence, cross-validated AUC | 0.570 |
 
 The anchored/unanchored split is the central result and is not a defect. An
 unanchored reference is a periodic patch with no aperiodic feature in frame; the
-correlation evidence genuinely does not identify a position. Measured on a bare
-lattice, **903 positions score exactly the maximum**. That is an
+correlation evidence genuinely does not identify a position. That is an
 information-theoretic limit, not an algorithmic one, and the correct response is
-to answer and flag rather than to succeed.
+to answer and flag rather than to succeed. The measurement that makes this
+concrete: escalating an unanchored case buys **+0.0** accuracy, while the same
+escalation on an anchored reference buys **+7.4 points**.
+
+### What the physics dataset changed
+
+Superseding every number previously quoted here against 108 geometry-only pairs.
+
+| | 108, clean | **324, physics** |
+|---|---|---|
+| accuracy, all pairs | 41.7% | 42.6% |
+| accuracy, anchored | 83.3% | 85.2% |
+| accuracy, unanchored | 0.0% | 0.0% |
+| median error, anchored | 0.028 px | 0.042 px |
+
+**The physics chain did not cost accuracy.** Across noise strata anchored
+accuracy is 83.3% / 83.3% / 88.9% for low / medium / high — high noise scored
+highest. ZNCC is normalised, so a 1.8x spread in capture noise does not move it.
+Worth stating deliberately rather than claiming noise robustness by accident.
+
+**Pose is now the dominant degradation axis**: 48.1% at `pose=none` against
+33.3% at `pose=large`, a ~15 point drop. This is the first measurement that
+prices R2's missing `pose.py`.
+
+### PSR and the escalation thresholds
+
+PSR collapsed relative to the thresholds: median **2.25**, p95 3.05, against
+`PSR_ACCEPT_THRESHOLD = 8.0`. **320 of 324 cases escalate to the ambiguous
+tier**, so the ladder is effectively inert.
+
+Retuning does not fix this. `AUC(psr -> correct)` is 0.581, and 0.557 at the
+fast tier, so PSR barely separates correct from wrong and every millisecond
+bought costs accuracy near-linearly:
+
+| accept | stop at fast | accuracy | mean ms | false accepts |
+|---:|---:|---:|---:|---:|
+| 8.0 (current) | 0.3% | 42.6% | 356 | 0 |
+| 3.0 | 11.7% | 42.3% | 321 | 21 |
+| 2.0 | 57.7% | 39.8% | 180 | 114 |
+| 0.0 (fast only) | 100% | 38.9% | 51 | 198 |
+
+The thresholds are therefore **kept at 8.0 / 4.0**: they are the only setting
+with zero false accepts, and no alternative dominates. The problem is the
+statistic, not the number.
+
+### Latency breakdown
+
+Per-stage, from `Diagnostics.stage_ms` (enable with
+`config.COLLECT_STAGE_TIMINGS`). Cold, which is what a sweep over distinct
+references measures.
+
+| stage | mean ms | % of call |
+|---|---:|---:|
+| `uniqueness_map` | 215.7 | 60.6% |
+| `correlate` | 103.3 | 29.0% |
+| `psf_sigma` | 17.6 | 4.9% |
+| `sidelobe_stats` | 13.8 | 3.9% |
+| `refine_subpixel` | 4.5 | 1.3% |
+| `select_candidate` | 0.1 | 0.0% |
+
+### The blocking finding: nothing detects anchoredness
+
+Accuracy is perfectly bimodal, so a feature that separated anchored from
+unanchored would nearly solve confidence outright — `AUC(anchoredness ->
+correct) = 0.935`. Nothing available does:
+
+| statistic | AUC vs anchoredness |
+|---|---:|
+| `psr` | 0.631 |
+| `uniqueness_score` as wired (`mean` of the map) | 0.576 |
+| R3's `uniqueness_score()` (`p99 - median`) | **0.493** |
+
+R3's scorer documents itself as "this should separate R1's anchored stratum from
+the unanchored one. If it does not, the map is not working." On this dataset it
+does not. Switching `localize.py` to it was measured and **rejected** — at 0.493
+it is worse than the current wiring, so the mean stays.
+
+This one gap blocks two things at once: the confidence calibrator (CV AUC 0.570,
+three of six features still dead constants) and a free 43% latency cut, since
+skipping escalation on unanchored cases would give 203 ms at identical accuracy.
+
+The map itself is not the problem — as a *weighting* mechanism it earns its
+keep. It is the scalar summary that carries no signal.
 
 ## Interfaces R4 owns
 
@@ -72,37 +161,28 @@ returns a finite coordinate with a valid confidence and an honest
 
 ## Outstanding dependencies
 
-### R3 — `uniqueness_map` (highest value item in the project)
+### R3 — an anchoredness signal (highest value item in the project)
 
-Still `return np.ones(...)`. The contract is agreed; the body is not written.
+**Landed since this was written:** `uniqueness_map` is implemented and live in
+`src/uniqueness.py`, `evaluate.py` exists, and the Euclidean/Chebyshev exclusion
+mismatch in `sidelobe_stats` is fixed. `TIE_SIGMA` is 0.0 on `main`, so commit
+`0ae1bd1` is moot and `r3-disambiguate` is stale — it predates the
+centre-versus-corner tie-break fix and would regress `main` if merged.
 
-R4 is fully wired and requires **no change**. Verified by injecting a stand-in
-map and re-running the whole pipeline
-(`benchmarks/verify_uniqueness_integration.py`):
+What remains is narrower and sharper than "implement the map". As a *weighting*
+mechanism the map works: it is worth +7.4 accuracy points on anchored references
+through escalation. What does not work is any **scalar summary** of it as an
+anchoredness detector — see "The blocking finding" above. Until some diagnostic
+separates anchored from unanchored, the confidence calibrator stays near chance
+and the unanchored escalation saving stays unavailable.
 
-| | current stub | non-constant stand-in |
-|---|---:|---:|
-| accuracy @ 1 px | 38.9% | **42.6%** |
-| anchored | 77.8% | **85.2%** |
-| unanchored | 0.0% | 0.0% |
-| confidence CV AUC | 0.504 | **0.828** |
+The earlier counterfactual on this page predicted CV AUC 0.926 from a working
+`uniqueness_score`. That did **not** reproduce: measured on the physics dataset
+with the real map it is **0.570**. The 0.926 came from a crude spectral-flatness
+stand-in on geometry-only data and should not be quoted again.
 
-That is from a crude spectral-flatness stand-in. A proper implementation should
-do better. The confidence model is the bigger prize: in the feature-level
-counterfactual a working `uniqueness_score` takes cross-validated AUC from
-**0.506 to 0.926**, which is the difference between a decorative confidence
-number and one that earns the 10% explainability block.
-
-Also outstanding on R3's side:
-
-- `sidelobe_stats` uses a **Euclidean** exclusion disc while R4's NMS suppresses
-  a **Chebyshev** square. The two regions disagree, so part of the peak's own
-  shoulder is counted as background and PSR is biased low.
-- Commit `0ae1bd1` (`TIE_SIGMA 1.0 -> 0.0`) was never merged. R4 has since made
-  the equivalent change; the branch can be dropped or rebased.
-- `evaluate.py` does not exist. R4 generated its own labels from R1's ground
-  truth for the confidence work; that is deliberately minimal and is not a
-  substitute for the evaluation harness.
+R4 requires no change to consume a better signal — the feature is already
+extracted, wired and fitted.
 
 ### R2 — `pose.estimate_pose`
 
@@ -129,15 +209,16 @@ gives a correlation peak of 0.9749 and `-theta` gives 0.2522.
 
 ### R1 — dataset
 
-Working and used throughout. Two notes:
+Working and used throughout. **Both notes previously on this page are closed:**
+`apply_sem_chain` now lives only in `src/sem_physics.py` and is imported by the
+generator, the duplicate is deleted, and the dataset carries the real physics
+chain across low/medium/high noise strata. Every number above is measured on
+that data.
 
-- `apply_sem_chain` currently lives in `generate_dataset.py` as an identity
-  passthrough, but the frozen contract places it in `sem_physics.py`. When R2
-  pushes, one of the two must be deleted rather than both existing.
-- The dataset carries **no physics at all** — no PSF, no noise, no edge
-  brightening — because that stub is identity. Every accuracy and confidence
-  number in this document is therefore measured on unrealistically clean data
-  and should be re-measured once the physics chain lands.
+One observation for R1 and R2: the noise strata do not currently produce a
+difficulty gradient — anchored accuracy is 83.3% / 83.3% / 88.9% across low /
+medium / high. Either that is a robustness result to claim deliberately, or the
+strata need wider separation before anyone cites noise robustness.
 
 ## Edge cases and known limitations
 
@@ -147,14 +228,19 @@ Working and used throughout. Two notes:
   lattice-dominated spectrum an ungated fit returned a confident ~2.4 regardless
   of the true blur, so it refuses and returns the documented default. Correct
   behaviour, but it means the PSF is effectively never measured on our data.
-- **Escalation never short-circuits.** With PSR thresholds at 8.0/4.0 and
-  observed PSR in the range 1.4 to 3.4, every pair escalates to the ambiguous
-  tier. Safe but slow. The thresholds are deliberately untuned: PSR does not yet
-  separate correct from incorrect (correct 1.77-3.08, wrong 1.44-3.41, ranges
-  overlapping), and lowering them before uniqueness weighting works would buy
-  speed by making every answer falsely confident.
-- **`n_tied` is always 1 and `tie_break_used` never fires**, both consequences of
-  `TIE_SIGMA = 0.0`. Two more dead confidence features.
+- **Escalation almost never short-circuits.** 320 of 324 pairs reach the
+  ambiguous tier. Safe but slow. The thresholds are now *tuned rather than
+  untuned*: swept across the full range and retained at 8.0/4.0 because PSR
+  separates correct from wrong at AUC 0.581 (correct median 2.33, wrong 2.22),
+  so no setting buys latency without paying accuracy. See the sweep above.
+- **`n_tied` is always 1 and `tie_break_used` never fires** — 0 of 324 — both
+  consequences of `TIE_SIGMA = 0.0`. Two dead confidence features, alongside
+  `scale_residual` and `abs_theta`, which are constant while pose is a stub.
+  Four of six features carry no variance.
+- **The low-confidence flag fires on 99.4% of cases.** Only one answer is
+  falsely clear, which is the property that matters, but a flag that is almost
+  always on carries little information. It is downstream of the same gap: with
+  no anchoredness signal there is nothing to clear it with.
 - **Recall@K is a real constraint.** `DEFAULT_TOP_K = 30` misses the truth in
   roughly half of ambiguous cases; K=200 recovers some. Not tuned, because it
   should be tuned on data with physics.
@@ -173,10 +259,8 @@ Resolved:
 
 Outstanding before submission:
 
-- `README.md` is still two lines and needs what it is, how to run it, and the
-  headline results.
-- `docs/citations.md`, `docs/assumptions.md` and `docs/failure_analysis.md` do
-  not exist. Owned by R1/R2/R3 but they gate the 30% and the 10%.
+- `docs/citations.md` and `docs/assumptions.md` do not exist. Owned by
+  R1/R2/R3, and they gate the 30%. `docs/failure_analysis.md` has landed.
 - **The package is importable as `src`**, which matches the frozen repository
   layout but is a poor distribution name and collides with anything else called
   `src` on the path. Worth revisiting if the submission is ever installed rather
