@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -90,7 +90,7 @@ def _gaussian_kernel(sigma: float) -> Array:
 
     kernel = np.exp(-0.5 * (axis / sigma) ** 2)
 
-    return kernel / kernel.sum()
+    return cast(Array, kernel / kernel.sum())
 
 
 def _gaussian_filter1d(
@@ -106,11 +106,14 @@ def _gaussian_filter1d(
         )
 
     if ndimage is not None:
-        return ndimage.gaussian_filter1d(
-            values,
-            sigma,
-            axis=axis,
-            mode="reflect",
+        return cast(
+            Array,
+            ndimage.gaussian_filter1d(
+                values,
+                sigma,
+                axis=axis,
+                mode="reflect",
+            ),
         )
 
     kernel = _gaussian_kernel(sigma)
@@ -144,10 +147,13 @@ def _gaussian_filter(
         )
 
     if ndimage is not None:
-        return ndimage.gaussian_filter(
-            values,
-            sigma=sigma,
-            mode="reflect",
+        return cast(
+            Array,
+            ndimage.gaussian_filter(
+                values,
+                sigma=sigma,
+                mode="reflect",
+            ),
         )
 
     return _gaussian_filter1d(
@@ -165,14 +171,17 @@ def _sobel_magnitude(
     values: Array,
 ) -> Array:
     if ndimage is not None:
-        return np.hypot(
-            ndimage.sobel(
-                values,
-                axis=0,
-            ),
-            ndimage.sobel(
-                values,
-                axis=1,
+        return cast(
+            Array,
+            np.hypot(
+                ndimage.sobel(
+                    values,
+                    axis=0,
+                ),
+                ndimage.sobel(
+                    values,
+                    axis=1,
+                ),
             ),
         )
 
@@ -190,9 +199,12 @@ def _sobel_magnitude(
         padded[:-2, :-2] + 2 * padded[:-2, 1:-1] + padded[:-2, 2:]
     )
 
-    return np.hypot(
-        gx,
-        gy,
+    return cast(
+        Array,
+        np.hypot(
+            gx,
+            gy,
+        ),
     )
 
 
@@ -329,13 +341,16 @@ def _as_unit_float32(
     if not np.all(np.isfinite(image)):
         raise ValueError("img contains NaN or infinity")
 
-    return np.clip(
-        image,
-        0.0,
-        1.0,
-    ).astype(
-        np.float32,
-        copy=False,
+    return cast(
+        Array,
+        np.clip(
+            image,
+            0.0,
+            1.0,
+        ).astype(
+            np.float32,
+            copy=False,
+        ),
     )
 
 
@@ -449,7 +464,7 @@ def poisson_shot_noise(
         * white_counts
     )
 
-    return (counts / white_counts).astype(np.float32)
+    return cast(Array, (counts / white_counts).astype(np.float32))
 
 
 def read_noise(
@@ -502,7 +517,11 @@ def scan_artifacts(
     if any(value < 0 or not np.isfinite(value) for value in values):
         raise ValueError("scan parameters must be finite and non-negative")
 
-    rows = img.shape[0]
+    # int(), not a bare shape lookup: ``Array`` is an unparameterised ndarray,
+    # so ``img.shape[0]`` is Any, and ``rng.normal(size=Any)`` then resolves to
+    # the scalar overload -- making gain and offset floats that the row
+    # broadcasting below cannot index.
+    rows = int(img.shape[0])
 
     gain = rng.normal(
         0.0,
@@ -683,8 +702,11 @@ def apply_sem_chain(
         **config["scan"],
     )
 
-    return np.clip(
-        out,
-        0.0,
-        1.0,
-    ).astype(np.float32)
+    return cast(
+        Array,
+        np.clip(
+            out,
+            0.0,
+            1.0,
+        ).astype(np.float32),
+    )
