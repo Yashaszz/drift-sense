@@ -204,10 +204,14 @@ Still open:
 
 ---
 
-## 9. Phase status (as of Aug 11, late)
+## 9. Phase status (as of Aug 12, late)
 
-Phases 0, 1, 2 complete for R3. Phase 3 build work complete. Phase 4's
-`failure_analysis.md` written early but its figures predate the ablation.
+Phases 0, 1, 2 complete for R3. Phase 3 build work complete and now *measured*
+on 324 pairs. Phase 4's `failure_analysis.md` rewritten on those numbers.
+
+The Phase 3 holdout gate is **closed**: `dataset_holdout` no longer depends on a
+transfer from R1. Generation is byte-reproducible across platforms, verified
+against pre-registered hashes, so it regenerates from seed in ~4.5 min.
 
 **Done tonight, PR #14 (`r3-recall-baseline`), open against `main`:**
 1. **recall@K** — `src/recall.py`. Reuses `_StageCache` so pose, template and
