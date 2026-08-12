@@ -35,6 +35,7 @@ from src.render import (
     reconstruct_from_gt,
     render_pair,
 )
+from src.sem_physics import NOISE_LEVELS as PHYSICS_NOISE_LEVELS
 from src.sem_physics import apply_sem_chain
 from src.types import FloatArray
 
@@ -410,6 +411,7 @@ def build_dataset(
     base_seed: int = DEFAULT_SEED,
     out_size: int = OUT_SIZE,
     supersample: int = DEFAULT_SUPERSAMPLE,
+    noise_levels: Sequence[str] | None = None,
 ) -> tuple[list[PairRecord], float, Path]:
     """Generate the stratified dataset and write ``ground_truth.jsonl``.
 
@@ -447,6 +449,12 @@ def build_dataset(
     (output_dir / "reference").mkdir(exist_ok=True)
     (output_dir / "search").mkdir(exist_ok=True)
 
+    levels = tuple(NOISE_LEVELS if noise_levels is None else noise_levels)
+    for level in levels:
+        if level not in PHYSICS_NOISE_LEVELS:
+            msg = f"unknown noise level {level!r}; src.sem_physics offers {PHYSICS_NOISE_LEVELS}"
+            raise ValueError(msg)
+
     anchor_span_nm = out_size * config.REF_PX_NM * ANCHOR_SPAN_FRACTION
     records: list[PairRecord] = []
     started = time.perf_counter()
@@ -456,7 +464,7 @@ def build_dataset(
         for anchored in (True, False):
             for pose in ("none", "small", "large"):
                 rotation_range, scale_range = POSE_RANGES[pose]
-                for noise_level in NOISE_LEVELS:
+                for noise_level in levels:
                     for _ in range(seeds_per_cell):
                         seed = base_seed + index
                         rng = np.random.default_rng(seed)
@@ -521,7 +529,7 @@ def build_dataset(
                         records.append(record)
                         index += 1
 
-    expected = expected_pair_count(seeds_per_cell)
+    expected = expected_pair_count(seeds_per_cell, levels)
     if len(records) != expected:
         msg = f"generated {len(records)} pairs but the stratification demands {expected}"
         raise ValueError(msg)
@@ -538,6 +546,7 @@ def build_dataset(
         base_seed=base_seed,
         out_size=out_size,
         supersample=supersample,
+        noise_levels=levels,
     )
     return records, time.perf_counter() - started, gt_path
 
@@ -644,20 +653,23 @@ def _generator_commit() -> str:
     return f"{commit}-dirty" if dirty else commit
 
 
-def expected_pair_count(seeds_per_cell: int) -> int:
+def expected_pair_count(seeds_per_cell: int, noise_levels: Sequence[str] | None = None) -> int:
     """Return how many pairs a full run must produce.
 
     Parameters
     ----------
     seeds_per_cell
         Pairs per stratification cell.
+    noise_levels
+        Noise strata generated; defaults to :data:`NOISE_LEVELS`.
 
     Returns
     -------
     int
         ``architecture x anchor x pose x noise x seeds_per_cell``.
     """
-    return 2 * 2 * 3 * len(NOISE_LEVELS) * seeds_per_cell
+    levels = NOISE_LEVELS if noise_levels is None else noise_levels
+    return 2 * 2 * 3 * len(levels) * seeds_per_cell
 
 
 def write_manifest(
@@ -668,6 +680,7 @@ def write_manifest(
     base_seed: int,
     out_size: int,
     supersample: int,
+    noise_levels: Sequence[str] | None = None,
 ) -> Path:
     """Write ``dataset_manifest.json`` describing this dataset.
 
@@ -707,7 +720,7 @@ def write_manifest(
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "pair_count": len(records),
-        "expected_pair_count": expected_pair_count(seeds_per_cell),
+        "expected_pair_count": expected_pair_count(seeds_per_cell, noise_levels),
         "image_count": len(records) * 2,
         "image_tree_sha256": image_tree_hash(output_dir),
         "file_tree_sha256": file_tree_hash(output_dir),
@@ -718,7 +731,7 @@ def write_manifest(
             "out_size": out_size,
             "supersample": supersample,
             "extent_nm": EXTENT_NM,
-            "noise_levels": list(NOISE_LEVELS),
+            "noise_levels": list(NOISE_LEVELS if noise_levels is None else noise_levels),
         },
         "strata_counts": counts,
         "anchored_references_with_anchor": sum(1 for r in anchored if r.anchors_in_reference > 0),
@@ -801,16 +814,35 @@ def compare_manifests(mine: dict[str, Any], theirs: dict[str, Any]) -> str:
     Separating the pixel hash from the file hash turns "our hashes differ" from
     an unanswerable question into a diagnosis: same pixels and different files
     is a harmless encoder difference, different pixels is a real one.
+
+    The pixel hash is checked *before* the commit, and the ordering is the whole
+    point. ``generator_commit`` is git HEAD at the moment the manifest was
+    written, not a fingerprint of the code that actually ran -- committing an
+    unrelated CSV mid-run moves it while leaving every generator line untouched.
+    An earlier revision compared it first and returned "different code", so two
+    provably byte-identical datasets short-circuited to a false divergence
+    before their pixels were ever compared. Commit identity is the weaker
+    signal, so it explains a difference rather than deciding one.
     """
     if mine["pair_count"] != theirs["pair_count"]:
         return f"different sizes: {mine['pair_count']} vs {theirs['pair_count']} pairs"
-    if mine["generator_commit"] != theirs["generator_commit"]:
-        return f"different code: {mine['generator_commit']} vs {theirs['generator_commit']}"
+
+    same_commit = mine["generator_commit"] == theirs["generator_commit"]
+    commit_note = (
+        ""
+        if same_commit
+        else f" (HEAD differed: {mine['generator_commit']} vs {theirs['generator_commit']}, "
+        "which may or may not touch the generator)"
+    )
+
     if mine["image_tree_sha256"] != theirs["image_tree_sha256"]:
-        return "PIXELS DIFFER -- same code and size, so this is a real divergence"
+        cause = "code differs, which is the likely cause" if not same_commit else "identical code"
+        return f"PIXELS DIFFER -- same size, {cause}{commit_note}"
     if mine.get("file_tree_sha256") != theirs.get("file_tree_sha256"):
-        return "identical pixels, different PNG encoding -- harmless, the data matches"
-    return "identical"
+        return (
+            f"identical pixels, different PNG encoding -- harmless, the data matches{commit_note}"
+        )
+    return f"identical{commit_note}"
 
 
 # ===========================================================================
@@ -1169,6 +1201,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seeds-per-cell", type=int, default=9)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--supersample", type=int, default=DEFAULT_SUPERSAMPLE)
+    parser.add_argument(
+        "--noise-levels",
+        nargs="+",
+        metavar="LEVEL",
+        default=None,
+        help=(
+            "noise strata to generate; defaults to the shipped "
+            f"{' '.join(NOISE_LEVELS)}. Pass 'none' to build the noise-free "
+            "ablation control. To pair it with the shipped set, keep "
+            "len(levels) x seeds-per-cell constant: --noise-levels none "
+            "--seeds-per-cell 27 reproduces the shipped scenes exactly, "
+            "noise-free, because a pair's geometry depends only on its seed."
+        ),
+    )
     parser.add_argument(
         "--overlay-check",
         type=int,
