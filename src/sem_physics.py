@@ -659,12 +659,18 @@ def apply_sem_chain(
     #
     # Edge brightening, PSF blur and scan artifacts remain fixed
     # within each capture preset.
+    #
+    # "none" is a true zero-noise stratum: it skips the shot-noise and
+    # read-noise stages outright rather than scaling them by 1.0, which
+    # previously made "none" and "medium" produce identical output (see
+    # scripts/validate_noise.py, section 5).
 
-    scaling = NOISE_SCALING[noise_level]
+    if noise_level != "none":
+        scaling = NOISE_SCALING[noise_level]
 
-    config["shot_noise"]["white_counts"] *= scaling["white_counts"]
+        config["shot_noise"]["white_counts"] *= scaling["white_counts"]
 
-    config["read_noise"]["sigma"] *= scaling["read_noise_sigma"]
+        config["read_noise"]["sigma"] *= scaling["read_noise_sigma"]
 
     # ---------------------------------------------------------------
     # Frozen SEM physics chain
@@ -684,17 +690,18 @@ def apply_sem_chain(
         **config["psf"],
     )
 
-    out = poisson_shot_noise(
-        out,
-        rng=rng,
-        **config["shot_noise"],
-    )
+    if noise_level != "none":
+        out = poisson_shot_noise(
+            out,
+            rng=rng,
+            **config["shot_noise"],
+        )
 
-    out = read_noise(
-        out,
-        rng=rng,
-        **config["read_noise"],
-    )
+        out = read_noise(
+            out,
+            rng=rng,
+            **config["read_noise"],
+        )
 
     out = scan_artifacts(
         out,
