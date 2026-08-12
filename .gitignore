@@ -272,6 +272,14 @@ ehthumbs.db
 Desktop.ini
 .DS_Store
 dataset/
-dataset_full/
 dataset_incomplete_105/
 dataset_holdout/
+
+# dataset_full keeps its provenance records tracked. The images are excluded as
+# everywhere else, but the manifest and ground truth are what let a results file
+# be traced back to the data it was measured on, and an ignored directory takes
+# them with it. Git cannot re-include a file whose parent directory is excluded,
+# so this has to exclude the *contents* rather than the directory itself.
+dataset_full/*
+!dataset_full/dataset_manifest.json
+!dataset_full/ground_truth.jsonl
