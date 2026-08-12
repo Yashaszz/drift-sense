@@ -1269,6 +1269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seeds_per_cell=args.seeds_per_cell,
         base_seed=args.seed,
         supersample=args.supersample,
+        noise_levels=args.noise_levels,
     )
 
     print(f"{len(records)} pairs in {elapsed:.1f}s -> {gt_path}")

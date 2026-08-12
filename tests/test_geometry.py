@@ -28,6 +28,7 @@ from src.generate_dataset import (
     expected_pair_count,
     file_tree_hash,
     image_tree_hash,
+    main,
     overlay_check,
     summarise_overlay,
     validate_record,
@@ -469,6 +470,34 @@ def _manifest(commit, image_hash, file_hash="f", pairs=324):
         "image_tree_sha256": image_hash,
         "file_tree_sha256": file_hash,
     }
+
+
+def test_noise_levels_flag_reaches_the_generator(monkeypatch, tmp_path):
+    """A parsed flag that never reaches build_dataset is worse than no flag.
+
+    The first cut added ``--noise-levels`` to the parser and did not pass it on,
+    so ``--noise-levels none`` silently produced the default three strata --
+    three times the pairs, none of them the control that was asked for, and no
+    error anywhere. CI passed because nothing exercised the wiring.
+    """
+    seen: dict[str, object] = {}
+
+    def fake_build(output_dir, **kwargs):
+        seen.update(kwargs)
+        return [], 0.0, output_dir / "ground_truth.jsonl"
+
+    monkeypatch.setattr("src.generate_dataset.build_dataset", fake_build)
+    monkeypatch.setattr("src.generate_dataset.write_manifest", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(
+        "src.generate_dataset.json.loads",
+        lambda *a, **k: {"image_tree_sha256": "x", "generator_commit": "y"},
+    )
+    (tmp_path / MANIFEST_NAME).write_text("{}", encoding="utf-8")
+
+    main(["--output-dir", str(tmp_path), "--noise-levels", "none", "--seeds-per-cell", "27"])
+
+    assert seen["noise_levels"] == ["none"]
+    assert seen["seeds_per_cell"] == 27
 
 
 def test_compare_manifests_does_not_let_the_commit_mask_the_pixels():
