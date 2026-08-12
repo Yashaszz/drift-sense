@@ -17,6 +17,8 @@ from src.generate_dataset import (
     OUT_SIZE,
     OVERLAY_BIAS_TOLERANCE_PX,
     POSE_RANGES,
+    PROBE_OFFSETS_PX,
+    OverlayResult,
     _sample_layout,
     build_dataset,
     count_anchors_in_reference,
@@ -24,6 +26,7 @@ from src.generate_dataset import (
     file_tree_hash,
     image_tree_hash,
     overlay_check,
+    summarise_overlay,
     validate_record,
     verify_dataset,
 )
@@ -367,10 +370,12 @@ def test_pose_baseline_matches_the_brief():
 def test_noise_strata_are_not_faked():
     """Only emit noise levels the physics can actually produce.
 
-    ``apply_sem_chain`` is a passthrough until R2's module lands, so generating
-    low/medium/high now would give R3 a stratum column that cannot differ --
-    worse than an honestly absent one. This fails the moment someone adds levels
-    without wiring the physics.
+    Before R2's module was wired in, ``apply_sem_chain`` was a passthrough, so
+    generating low/medium/high would have given R3 a stratum column that
+    couldn't differ -- worse than an honestly absent one. Now that
+    ``src.sem_physics`` is wired in, this guards the reverse mistake: emitting
+    strata the physics can't actually back up, or silently reverting to a
+    passthrough without also reverting ``NOISE_LEVELS``.
     """
     from src.generate_dataset import apply_sem_chain
 
@@ -408,7 +413,13 @@ def test_manifest_describes_the_dataset(tiny_dataset):
     assert manifest["image_count"] == manifest["pair_count"] * 2
     assert len(manifest["image_tree_sha256"]) == 64
     assert manifest["generation"]["seeds_per_cell"] == 1
-    assert manifest["strata_counts"]["architecture"] == {"dram": 6, "finfet": 6}
+    # 2 anchor conditions x 3 pose strata x len(NOISE_LEVELS) noise strata,
+    # per architecture, at seeds_per_cell=1.
+    per_architecture = 2 * 3 * len(NOISE_LEVELS)
+    assert manifest["strata_counts"]["architecture"] == {
+        "dram": per_architecture,
+        "finfet": per_architecture,
+    }
 
 
 def test_verify_accepts_an_untouched_dataset(tiny_dataset):
@@ -528,3 +539,84 @@ def test_overlay_detects_a_planted_offset(tiny_dataset, planted_px):
     assert abs(mean_dx) > OVERLAY_BIAS_TOLERANCE_PX
     assert abs(mean_dy) > OVERLAY_BIAS_TOLERANCE_PX
     assert np.sign(mean_dx) == -np.sign(planted_px)
+
+
+# ---------------------------------------------------------------------------
+# Overlay verdict statistics
+# ---------------------------------------------------------------------------
+#
+# summarise_overlay exists because the plain mean above failed a clean dataset
+# once the noise strata landed: a 12-pair sample read dy = -0.250 while the same
+# data at 48 pairs read +0.036. These pin down the two corrections that fixed it
+# without blunting the check.
+
+
+def _result(dx, dy, pair_id="pair"):
+    return OverlayResult(pair_id=pair_id, mean_abs_error=0.1, dx=dx, dy=dy)
+
+
+def test_summary_excludes_pairs_pinned_at_the_probe_limit():
+    """A rail-pinned pair is censored, not measured.
+
+    ``_best_offset`` takes an argmin over a bounded probe set, so a result at the
+    end of that range means "at most this far", not "exactly this far". Counting
+    it as exact drags the mean toward the rail, which is precisely how two
+    ambiguous FinFET pairs failed a clean 12-pair dataset.
+    """
+    rail = max(PROBE_OFFSETS_PX)
+    results = [_result(0.0, 0.0) for _ in range(10)]
+    results += [_result(0.0, -rail), _result(0.0, -rail)]
+
+    summary = summarise_overlay(results)
+
+    assert summary.pinned == 2
+    assert summary.measured == 10
+    assert summary.mean_dy == pytest.approx(0.0)
+    assert summary.verdict == "ok"
+
+
+def test_summary_is_inconclusive_rather_than_failed_on_a_small_sample():
+    """Too few pairs to resolve the tolerance must ask for more, not cry wolf.
+
+    Failing here would train the team to ignore the one check that guards the
+    coordinate convention.
+    """
+    # A wide, near-symmetric spread whose mean drifts past the tolerance only
+    # because the sample is small; the standard error stays comparable to it.
+    results = [_result(0.0, -1.0 + 0.5 * i) for i in range(4)]
+    results += [_result(0.0, -0.5), _result(0.0, -0.5)]
+
+    summary = summarise_overlay(results)
+
+    if summary.bias > OVERLAY_BIAS_TOLERANCE_PX:
+        assert summary.verdict == "inconclusive"
+        assert summary.bias <= 2.0 * max(summary.se_dx, summary.se_dy)
+
+
+def test_summary_still_fails_a_tight_real_offset():
+    """A systematic error must fail even though the gate now tolerates scatter.
+
+    This is the regression that matters: the corrections above must not have
+    bought a clean pass by blunting the check.
+    """
+    results = [_result(0.0, -0.5) for _ in range(12)]
+
+    summary = summarise_overlay(results)
+
+    assert summary.verdict == "failed"
+    assert summary.bias == pytest.approx(0.5)
+
+
+def test_summary_fails_when_every_pair_runs_to_the_same_rail():
+    """A ground truth wrong by more than the probe range pins everything.
+
+    Censoring forgives ambiguity, not a defect large enough to drive every pair
+    off the same end of the probe set.
+    """
+    rail = max(PROBE_OFFSETS_PX)
+    results = [_result(0.0, -rail) for _ in range(12)]
+
+    summary = summarise_overlay(results)
+
+    assert summary.verdict == "failed"
+    assert "probe range" in summary.detail

@@ -35,6 +35,7 @@ from src.render import (
     reconstruct_from_gt,
     render_pair,
 )
+from src.sem_physics import apply_sem_chain
 from src.types import FloatArray
 
 __all__ = [
@@ -42,8 +43,10 @@ __all__ = [
     "PairRecord",
     "build_dataset",
     "OverlayResult",
+    "OverlaySummary",
     "image_tree_hash",
     "overlay_check",
+    "summarise_overlay",
     "main",
     "validate_record",
     "verify_dataset",
@@ -53,6 +56,7 @@ MANIFEST_NAME: str = "dataset_manifest.json"
 """Filename of the manifest written alongside the images."""
 
 MANIFEST_SCHEMA_VERSION: int = 2
+"""Bumped when the manifest gains or loses a field."""
 
 OVERLAY_BIAS_TOLERANCE_PX: float = 0.2
 """Largest *mean* preferred offset the overlay check tolerates.
@@ -69,12 +73,20 @@ the mean lands within about 0.10 px of zero (12 pairs, 0.25 px granularity, so a
 standard error near 0.08); a planted 0.5 px offset reads back as roughly -0.46.
 0.2 sits cleanly between them.
 
-One observation worth keeping: the mean ``dy`` runs slightly negative across
-runs (-0.08 to -0.10) while ``dx`` sits at zero. That is inside the noise for
-this sample size, but it is consistently signed, so it is worth re-checking with
-a larger sample rather than assuming it is nothing.
+The earlier note here -- that the mean ``dy`` ran consistently negative
+(-0.08 to -0.10) and deserved a larger sample -- has been resolved. It was
+sampling noise. Once the noise strata were wired in, a 12-pair check read
+``dy = -0.250`` and failed this tolerance; the same dataset at 48 pairs reads
+``(-0.016, +0.036)``. The 12-pair failure was driven by two pairs pinned at the
+-1.00 px probe limit, and the pinned pairs across a larger sample split both
+ways in sign, which a real convention error cannot do.
+
+Hence the sample-size rule the CLI now enforces: 12 pairs gives a standard
+error near 0.12 px, so a 0.2 px tolerance sits inside 2 SE and the gate cannot
+distinguish a defect from scatter. Use 48 or more when the answer has to mean
+something. Rail-pinned pairs concentrate in FinFET, whose finer pitch aliases
+harder against the 10x coarser search capture and flattens the error surface.
 """
-"""Bumped when the manifest gains or loses a field."""
 
 DEFAULT_SEED: int = 20260807
 """Frozen base seed. Every pair's seed is this plus its index."""
@@ -97,30 +109,15 @@ scale +-3%. ``large`` deliberately exceeds it, so the dataset carries stress
 cases beyond the range anyone is tuning against.
 """
 
-NOISE_LEVELS: tuple[str, ...] = ("none",)
+NOISE_LEVELS: tuple[str, ...] = ("low", "medium", "high")
 """Noise strata generated.
 
-Currently one inert level, because :func:`apply_sem_chain` is a passthrough
-until ``src.sem_physics`` lands. Change to ``("low", "medium", "high")`` in the
-same commit that wires R2's module in -- the stratification loop and the record
-schema already handle it, and :data:`NOISE_SCALING` holds the intended mapping.
-Generating three identical noise strata before the physics is real would put a
-column in R3's per-stratum table that cannot differ, which is worse than a
-column that is honestly absent.
-"""
-
-NOISE_SCALING: dict[str, dict[str, float]] = {
-    "low": {"dose": 2.0, "read_noise": 0.5},
-    "medium": {"dose": 1.0, "read_noise": 1.0},
-    "high": {"dose": 0.35, "read_noise": 2.0},
-}
-"""Provisional multipliers on R2's preset dose and read-noise sigma.
-
-``medium`` is R2's preset unchanged. Dose drives shot noise, so halving it
-raises noise as the square root; read-noise sigma is additive and scales
-directly. **Not yet confirmed with R2** -- they shipped two captures presets
-(reference/search) rather than three severity levels, so this mapping is R1's
-proposal pending their answer.
+Wired to ``src.sem_physics.apply_sem_chain`` now that R2's module has landed.
+``"none"`` is deliberately excluded here -- in R2's module it is a
+zero-noise-stage escape hatch for callers, not a severity level meant to sit
+in the per-stratum eval table alongside low/medium/high. Scaling itself is
+owned by ``src.sem_physics.NOISE_SCALING``; R1 no longer keeps a parallel copy
+of those multipliers.
 """
 
 
@@ -186,44 +183,13 @@ FINFET_RANGES: dict[str, tuple[float, float]] = {
 # ===========================================================================
 # The frozen physics seam
 # ===========================================================================
-
-
-def apply_sem_chain(
-    image: FloatArray,
-    px_nm: float,
-    params: dict[str, Any],
-    rng: np.random.Generator,
-) -> FloatArray:
-    """Apply the SEM capture chain to one rendered image.
-
-    Parameters
-    ----------
-    image
-        Geometry-only image in ``[0, 1]``.
-    px_nm
-        Sampling pitch of this capture, in nanometres.
-    params
-        Chain parameters, e.g. ``{"noise_level": "medium"}``.
-    rng
-        Seeded generator.
-
-    Returns
-    -------
-    FloatArray
-        Image of the same shape, with capture physics applied.
-
-    Notes
-    -----
-    **Frozen seam, owned by R2.** Contracted order once implemented:
-    edge brightening, PSF blur, Poisson shot noise, read noise, scan artifacts,
-    applied independently per capture -- reference and search are two separate
-    physical acquisitions and must not share a noise draw.
-
-    Currently an identity passthrough, so the pipeline runs end to end before
-    ``src.sem_physics`` exists. Replacing this body requires no change here.
-    """
-    del px_nm, params, rng  # consumed by R2's implementation, not by the stub
-    return image.copy()
+#
+# apply_sem_chain is imported from src.sem_physics (R2's module, owned by
+# them). Contracted order: edge brightening, PSF blur, Poisson shot noise,
+# read noise, scan artifacts, applied independently per capture -- reference
+# and search are two separate physical acquisitions and must not share a
+# noise draw. The call sites below pass "reference"/"search" as the preset so
+# each capture gets its own degradation profile.
 
 
 # ===========================================================================
@@ -516,10 +482,16 @@ def build_dataset(
                         )
 
                         reference = apply_sem_chain(
-                            reference, config.REF_PX_NM, {"noise_level": noise_level}, rng
+                            reference,
+                            config.REF_PX_NM,
+                            {"preset": "reference", "noise_level": noise_level},
+                            rng,
                         )
                         search = apply_sem_chain(
-                            search, plan.search_px_nm, {"noise_level": noise_level}, rng
+                            search,
+                            plan.search_px_nm,
+                            {"preset": "search", "noise_level": noise_level},
+                            rng,
                         )
 
                         tag = "anchored" if anchored else "unanchored"
@@ -993,6 +965,171 @@ def overlay_check(
     return results
 
 
+@dataclass(frozen=True, slots=True)
+class OverlaySummary:
+    """The verdict of an overlay check, and the numbers behind it.
+
+    Attributes
+    ----------
+    n
+        Pairs checked.
+    measured, pinned
+        Pairs that found an interior minimum, and pairs that ran to the probe
+        limit. ``measured + pinned == n``.
+    mean_dx, mean_dy
+        Mean preferred offset over the measured pairs, in reference pixels.
+    se_dx, se_dy
+        Standard error of those means.
+    bias
+        The larger absolute mean, i.e. the number judged against the tolerance.
+    verdict
+        ``"ok"``, ``"failed"``, or ``"inconclusive"``.
+    detail
+        One line explaining the verdict.
+    """
+
+    n: int
+    measured: int
+    pinned: int
+    mean_dx: float
+    mean_dy: float
+    se_dx: float
+    se_dy: float
+    bias: float
+    verdict: Literal["ok", "failed", "inconclusive"]
+    detail: str
+
+
+def summarise_overlay(
+    results: Sequence[OverlayResult],
+    *,
+    tolerance_px: float = OVERLAY_BIAS_TOLERANCE_PX,
+) -> OverlaySummary:
+    """Turn per-pair overlay results into a pass/fail verdict on the ground truth.
+
+    Parameters
+    ----------
+    results
+        Per-pair results from :func:`overlay_check`.
+    tolerance_px
+        Largest mean offset accepted as unbiased.
+
+    Returns
+    -------
+    OverlaySummary
+        The verdict and the statistics supporting it.
+
+    Notes
+    -----
+    Two corrections separate this from a plain mean, both learned from a false
+    failure after the noise strata landed:
+
+    **Censoring.** :func:`_best_offset` returns an argmin over a bounded probe
+    set. A result at the end of that range has not located a minimum, it has run
+    out of room -- the true value is "at most -1 px", not "exactly -1 px".
+    Averaging such a value as if it were exact pulls the mean toward the rail.
+    Periodic lattices produce these (a lattice puts an equal peak at every
+    lattice vector) and FinFET produces more of them than DRAM, its finer pitch
+    aliasing harder against the 10x coarser search capture. They are excluded
+    from the mean and reported separately.
+
+    **Sampling noise.** The probe is quantised to 0.25 px, so a small sample
+    scatters widely: at 12 pairs the standard error is near 0.12 px against a
+    0.2 px tolerance, and the gate cannot then tell a defect from chance. A bias
+    must therefore exceed both the tolerance and twice its own standard error.
+    A real convention error clears both -- a planted 0.5 px offset reads back at
+    roughly five standard errors even at 12 pairs -- while an underpowered
+    sample that happens to lean returns ``"inconclusive"``, which asks for more
+    pairs rather than either passing or crying wolf.
+
+    Whole-sample rail pinning is the one case where censored values still fail:
+    a ground truth wrong by more than the probe range drives every pair to the
+    same rail, which is a defect, not ambiguity.
+    """
+    n = len(results)
+    if n == 0:
+        msg = "overlay summary needs at least one result"
+        raise ValueError(msg)
+
+    rail = max(PROBE_OFFSETS_PX)
+    pinned = [r for r in results if abs(r.dx) >= rail or abs(r.dy) >= rail]
+    measured = [r for r in results if abs(r.dx) < rail and abs(r.dy) < rail]
+
+    # Every pair driven to the same rail is a real offset beyond the probe
+    # range, not the ambiguity that censoring is meant to forgive.
+    if len(pinned) > n / 2:
+        for axis, label in ((0, "dx"), (1, "dy")):
+            rails = [(r.dx, r.dy)[axis] for r in pinned]
+            leaning = [v for v in rails if abs(v) >= rail]
+            if leaning and abs(sum(np.sign(leaning))) == len(leaning):
+                return OverlaySummary(
+                    n=n,
+                    measured=len(measured),
+                    pinned=len(pinned),
+                    mean_dx=float(np.mean([r.dx for r in results])),
+                    mean_dy=float(np.mean([r.dy for r in results])),
+                    se_dx=0.0,
+                    se_dy=0.0,
+                    bias=float(rail),
+                    verdict="failed",
+                    detail=(
+                        f"{len(leaning)}/{n} pairs pinned to the same {label} rail -- the "
+                        "published ground truth is offset by more than the probe range"
+                    ),
+                )
+
+    if not measured:
+        return OverlaySummary(
+            n=n,
+            measured=0,
+            pinned=len(pinned),
+            mean_dx=float("nan"),
+            mean_dy=float("nan"),
+            se_dx=float("nan"),
+            se_dy=float("nan"),
+            bias=float("nan"),
+            verdict="failed",
+            detail="every pair was ambiguous; the check cannot speak to the ground truth",
+        )
+
+    offsets = np.array([[r.dx, r.dy] for r in measured], dtype=float)
+    mean_dx, mean_dy = (float(v) for v in offsets.mean(axis=0))
+    bias = max(abs(mean_dx), abs(mean_dy))
+
+    m = len(measured)
+    if m > 1:
+        se_dx, se_dy = (float(v) for v in offsets.std(axis=0, ddof=1) / np.sqrt(m))
+    else:
+        se_dx = se_dy = float("inf")
+    se = se_dx if abs(mean_dx) >= abs(mean_dy) else se_dy
+
+    if bias > tolerance_px and bias > 2.0 * se:
+        verdict: Literal["ok", "failed", "inconclusive"] = "failed"
+        detail = f"systematic bias of {bias:.3f} px -- the published ground truth is offset"
+    elif bias > tolerance_px:
+        verdict = "inconclusive"
+        detail = (
+            f"bias {bias:.3f} px exceeds the {tolerance_px} px tolerance but is within two "
+            f"standard errors ({2.0 * se:.3f} px); re-run with more than {n} pairs"
+        )
+    else:
+        verdict = "ok"
+        detail = "no systematic offset; the published ground truth fits best"
+
+    return OverlaySummary(
+        n=n,
+        measured=m,
+        pinned=len(pinned),
+        mean_dx=mean_dx,
+        mean_dy=mean_dy,
+        se_dx=se_dx,
+        se_dy=se_dy,
+        bias=bias,
+        verdict=verdict,
+        detail=detail,
+    )
+
+
 def _load_png(path: Path) -> FloatArray:
     """Read an 8-bit PNG as a ``[0, 1]`` float32 image.
 
@@ -1053,20 +1190,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"  {result.pair_id:44s} mean|err| {result.mean_abs_error:.4f}  "
                 f"best offset ({result.dx:+.2f}, {result.dy:+.2f}) px"
             )
-        mean_dx = float(np.mean([r.dx for r in results]))
-        mean_dy = float(np.mean([r.dy for r in results]))
-        bias = max(abs(mean_dx), abs(mean_dy))
-        print(
-            f"\nmean preferred offset: ({mean_dx:+.3f}, {mean_dy:+.3f}) px "
-            f"over {len(results)} pairs"
-        )
-        if bias > OVERLAY_BIAS_TOLERANCE_PX:
+        summary = summarise_overlay(results)
+
+        if summary.pinned:
             print(
-                f"FAILED: systematic bias of {bias:.3f} px -- the published ground truth is offset"
+                f"\n  {summary.pinned}/{summary.n} pairs pinned at the "
+                f"+-{max(PROBE_OFFSETS_PX):.2f} px probe limit: ambiguous fit, "
+                "excluded from the bias estimate"
             )
-            return 1
-        print("OK: no systematic offset; the published ground truth fits best")
-        return 0
+        if summary.measured:
+            print(
+                f"\nmean preferred offset: ({summary.mean_dx:+.3f}, {summary.mean_dy:+.3f}) px "
+                f"over {summary.measured} unambiguous pairs"
+            )
+            print(f"  standard error:      (+-{summary.se_dx:.3f}, +-{summary.se_dy:.3f}) px")
+
+        print(f"{summary.verdict.upper()}: {summary.detail}")
+        return 0 if summary.verdict == "ok" else 1
 
     if args.verify:
         try:
