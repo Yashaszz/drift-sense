@@ -274,6 +274,7 @@ Desktop.ini
 dataset/
 dataset_incomplete_105/
 dataset_holdout/
+dataset_control/
 
 # dataset_full keeps its provenance records tracked. The images are excluded as
 # everywhere else, but the manifest and ground truth are what let a results file
