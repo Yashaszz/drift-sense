@@ -17,7 +17,21 @@ set -euo pipefail
 REF="${1:-HEAD}"
 ROOT="$(git rev-parse --show-toplevel)"
 CLEAN="$(mktemp -d)"
-trap 'rm -rf "$CLEAN"' EXIT
+
+# On failure, print whatever the failing stage logged before the temp tree is
+# removed. Without this the trap deletes the only copy of the traceback and the
+# run reports a bare exit code -- which is how the first real failure this
+# script caught nearly went undiagnosed.
+cleanup() {
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    for log in "$CLEAN"/pytest.log "$CLEAN"/mypy.log "$CLEAN"/cli.json; do
+      [[ -f "$log" ]] && { echo; echo "--- ${log##*/} (tail) ---"; tail -40 "$log"; }
+    done
+  fi
+  rm -rf "$CLEAN"
+}
+trap cleanup EXIT
 
 echo "==> Unpacking $REF into $CLEAN"
 git -C "$ROOT" archive --format=tar "$REF" | tar -x -C "$CLEAN"
