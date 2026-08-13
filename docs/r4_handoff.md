@@ -269,15 +269,29 @@ Resolved:
 
 Outstanding before submission:
 
-- `docs/citations.md` and `docs/assumptions.md` do not exist. Owned by
-  R1/R2/R3, and they gate the 30%. `docs/failure_analysis.md` has landed.
 - **The package is importable as `src`**, which matches the frozen repository
   layout but is a poor distribution name and collides with anything else called
   `src` on the path. Worth revisiting if the submission is ever installed rather
   than unzipped.
-- **No clean-machine test has been run yet.** Unzipping on a laptop that has
-  never seen the project and running it end to end is the single highest-value
-  remaining packaging task.
+
+Closed since this list was written:
+
+- `docs/citations.md`, `docs/assumptions.md` and `docs/failure_analysis.md` all
+  exist and ship in the archive, so the 30% and the 10% are no longer gated on
+  missing documents.
+- **The clean-machine test has been run and passes.**
+  `scripts/clean_room_check.sh` (R3's) unpacks a `git archive` of a given ref
+  into a temporary tree — tracked files only, no `.venv`, no dataset, no trained
+  artefacts — resolves the environment from the lockfile and runs the suite,
+  lint, types and the CLI there. On the merged integration tree it passes all
+  four stages, and the CLI returns the same coordinate from the extracted
+  archive as it does in the development tree.
+
+  This is the check that catches "works on my machine", and it has already
+  earned its place twice: once on an ignore rule that excluded the results
+  sidecars, and once on a provenance test that read `git check-ignore`'s
+  "cannot answer" exit code as "not ignored" and so failed only where no `.git`
+  exists — which is precisely the grader's situation.
 - No trained confidence model ships, by design. `config.CONFIDENCE_MODEL_PATH`
   is looked up and absence falls back to the heuristic, so the deliverable runs
   from a clean unzip with no artefacts.

@@ -68,7 +68,7 @@ is present without being confounded by undersampling.
 The consequence for the results: **the periodic-ambiguity problem is modelled
 faithfully; the specific node is not.** Nothing in the pipeline is tuned to a
 pitch value (`PSR_EXCLUSION_RADIUS_PX` and `DEFAULT_NMS_RADIUS_PX` are
-deliberately decoupled from it, `R3_CONTEXT.md` §5), so the scaling does not
+deliberately decoupled from it, see `src/config.py`), so the scaling does not
 leak into the algorithm.
 
 **The ±20% / ±15% randomisation is not a process-tolerance figure.** Real CD
@@ -189,7 +189,7 @@ why the matcher uses ZNCC and not SSD (§3.1).
 | 5 — sub-pixel | Upsampled-DFT phase correlation, `DEFAULT_UPSAMPLE = 100` | **[C]** | Guizar-Sicairos, Thurman & Fienup [20] — evaluate the inverse DFT directly on a fine grid near the peak by matrix multiplication instead of zero-padding the whole transform (`_upsampled_patch`, `src/matcher.py:1298`). Foroosh et al. [21] for sub-pixel phase correlation, which is the primary routine (`src/matcher.py:1221`); surface interpolation is the documented fallback. |
 | 4b — detection statistic | Peak-to-sidelobe ratio | **[C]** | Kumar & Hassebrook [22] define PSR as a correlation-filter performance measure; MACE-filter work uses it as the accept/reject statistic [23]; MOSSE uses it directly as a per-frame failure detector [24]. `src/disambiguate.py:107`. |
 | 4b — thresholding | Accept / escalate on a detection statistic | **[M]** | Structurally CFAR: set the threshold from the local background rather than absolutely [25, 26]. Our thresholds (8.0 / 4.0) are **[A]** and deliberately untuned — lowering them buys speed by making wrong answers confident. `src/config.py:112-115`. |
-| 4a — uniqueness | Tile autocorrelation sidelobe as a positional-ambiguity score | **[M]** | A signal's autocorrelation *is* its ambiguity function under matched filtering, so sidelobe height measures positional ambiguity directly — Woodward's formulation [27]. The tiling, the σ = 4 px prefilter, the Hann taper and the absolute (never per-image) scale are ours **[A]**; the reasoning is in `R3_CONTEXT.md` §3 and `src/uniqueness.py`. |
+| 4a — uniqueness | Tile autocorrelation sidelobe as a positional-ambiguity score | **[M]** | A signal's autocorrelation *is* its ambiguity function under matched filtering, so sidelobe height measures positional ambiguity directly — Woodward's formulation [27]. The tiling, the σ = 4 px prefilter, the Hann taper and the absolute (never per-image) scale are ours **[A]**; the reasoning is in `src/uniqueness.py`. |
 | 3b — candidates | Non-maximum suppression at a fixed radius | **[A]** | Standard practice; radius 8 px is set by lattice pitch, not by literature. Recall is flat across radii 2–16 (`results/recall_324.csv`), so the choice is not load-bearing. |
 | 6 — confidence | Logistic calibration of a diagnostic vector | **[C]** | Platt scaling [28]; Niculescu-Mizil & Caruana [29] on why raw scores are not probabilities. `src/confidence.py:218`. |
 | overall | Two-stage coarse-to-fine registration | **[C]** | Brown [30] and Zitová & Flusser [31], the standard registration surveys. |
