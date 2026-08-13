@@ -1,7 +1,7 @@
 """Stage 4 — turning "the answer is in the top-K" into "the answer is top-1".
 
-Owned by R3. This file is a stub placed by R4 so that the pipeline imports and
-runs end-to-end; R3 replaces the bodies without changing the signatures.
+Owned by R3. Began as a stub placed by R4 so the pipeline imported and ran
+end-to-end; the bodies are real since PR #13, and the signatures never changed.
 
 The problem
 -----------
@@ -33,11 +33,32 @@ Four layers, applied in order, each cheap
 
 Status
 ------
-Stubs. ``uniqueness_map`` returns uniform weights, which makes masked
-correlation reduce exactly to unmasked correlation — a useful equivalence test
-for R4's Stage 4a work. ``select_candidate`` returns the strongest peak, which
-is precisely the plain-NCC baseline behaviour, so the stub doubles as the
-incumbent we are required to beat.
+Implemented, and measured on the 324-pair set (``results/ablation_324.csv``,
+``results/full_324.csv``). Layers (a), (b) and (d) are live; the learned
+re-ranker (c) was never needed and does not exist.
+
+**(a) Uniqueness weighting is the entire disambiguation gain**: +0.080 on the
+anchored stratum, 0.753 → 0.833. ``uniqueness_map`` and ``uniqueness_score``
+are real — they live in :mod:`src.uniqueness` and are re-exported here so R4's
+imports did not have to change — and the map is emphatically *not* uniform.
+Cite the anchored stratum: across all 324 the unanchored half is pinned at
+0.000 by construction and hides the effect.
+
+**(b) PSR does not separate correct from incorrect on periodic layouts.** The
+sidelobe region contains genuine lattice peaks rather than noise, so the
+background the statistic normalises against is itself signal. With the
+thresholds at 8.0/4.0, 320 of 324 cases escalate. That is reported as a finding,
+not tuned away: lowering the thresholds would buy speed by making wrong answers
+confident.
+
+**(d) The tie-break is correct and never fires.** ``select_candidate`` applies
+the mandated centre prior among candidates statistically indistinguishable from
+the best, but ``TIE_SIGMA`` is 0.0 — exact ties only — and exact ties do not
+occur on this dataset. ``n_tied`` is always 1, so it returns ``peaks[0]`` and
+contributes exactly 0.000 to accuracy. Both ``n_tied`` and ``tie_break_used``
+are consequently dead as confidence features. The tie-break stays because the
+problem statement mandates it and because it is correct when ties exist, not
+because it is currently earning anything.
 """
 
 import numpy as np

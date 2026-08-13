@@ -28,8 +28,12 @@ import argparse
 import csv
 import json
 import math
+import platform
+import subprocess
+import sys
 import time
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -355,6 +359,70 @@ def recall_at_k_pass(cases: list[dict[str, Any]], data_dir: Path, k: int = 30) -
 
 
 # --------------------------------------------------------------------------
+# Run provenance
+# --------------------------------------------------------------------------
+
+
+def _git_commit() -> str:
+    """Return the current commit, or ``"unknown"`` outside a git checkout."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return completed.stdout.strip() or "unknown"
+
+
+def write_run_metadata(out: Path, *, cases: int, data_dir: Path, mode: str) -> Path:
+    """Record which machine produced a results CSV, beside the CSV.
+
+    Parameters
+    ----------
+    out
+        Path the results CSV was written to. The sidecar takes the same stem
+        with a ``.meta.json`` suffix.
+    cases
+        Number of rows written.
+    data_dir
+        Dataset the run measured.
+    mode
+        Mode passed to :func:`~src.localize.localize`.
+
+    Returns
+    -------
+    Path
+        The sidecar that was written.
+
+    Notes
+    -----
+    Latency is the one headline number that is a property of the machine rather
+    than of the code. Two of us measured the same 324 pairs and reported 206 ms
+    and 356 ms; both were correct, and neither said on what. A number nobody can
+    attribute cannot be defended, so every CSV now carries its machine with it.
+    """
+    meta = {
+        "generated_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        "commit": _git_commit(),
+        "cases": cases,
+        "dataset": str(data_dir),
+        "mode": mode,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor() or platform.machine(),
+        "python": sys.version.split()[0],
+        "numpy": np.__version__,
+    }
+    meta_path = out.with_suffix(".meta.json")
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return meta_path
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
@@ -395,6 +463,9 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
     print(f"\nWrote {len(rows)} rows to {args.out}")
+
+    meta_path = write_run_metadata(args.out, cases=len(rows), data_dir=args.data, mode=args.mode)
+    print(f"Wrote run metadata to {meta_path}")
 
     broken = [r for r in rows if r["error"]]
     if broken:

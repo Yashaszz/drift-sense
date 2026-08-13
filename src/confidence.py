@@ -197,9 +197,14 @@ def is_low_confidence(
 
     Notes
     -----
-    Deliberately not a bare threshold on ``confidence``. An internal error or an
-    ambiguous peak structure flags the result regardless of what the score says,
-    so that a miscalibrated model cannot mask a known-bad case.
+    Deliberately not a bare threshold on ``confidence``. An internal error, an
+    unmeasurable statistic, or an answer that correlation evidence did not
+    actually decide all flag the result regardless of what the score says, so
+    that a miscalibrated model cannot mask a known-bad case.
+
+    Every gate here is one-directional: each can only *raise* the flag, never
+    clear it. That is what lets an unfitted or badly fitted calibrator degrade
+    the number without degrading the safety property.
     """
     if diagnostics.failure_mode != "none":
         return True
@@ -209,9 +214,22 @@ def is_low_confidence(
         # False for NaN, which would clear the flag exactly when there is no
         # evidence to clear it with.
         return True
-    if diagnostics.psr < config.PSR_AMBIGUOUS_THRESHOLD:
+    if diagnostics.psr < config.get_thresholds().psr_ambiguous:
         return True
-    return confidence < threshold
+    if diagnostics.tie_break_used and diagnostics.n_tied > 1:
+        # The centre tie-break is a prior, not evidence. When it decided between
+        # genuinely tied candidates the answer rests on "the stage aimed here",
+        # which is exactly the unanchored case that cannot be solved. The
+        # correlation surface ranked nothing, so the score above it is not
+        # measuring this answer.
+        return True
+    if not np.isfinite(confidence):
+        # Same failure class as the NaN psr above, one level up: a model that
+        # returns NaN would sail through ``confidence < threshold`` as False.
+        return True
+    # Coerced because a numpy scalar confidence yields np.bool_, which json
+    # cannot serialise and which the CLI's --json path would fail on.
+    return bool(confidence < threshold)
 
 
 class ConfidenceModel:
