@@ -57,8 +57,14 @@ per capture — at the 1 px (10 nm) tolerance. All 324 scored; none failed.
 | accuracy, unanchored references | 0.0% |
 | accuracy, all pairs | 42.6% |
 | median error, anchored | **0.042 px** |
-| latency, median / p95 | 356 ms / 363 ms |
-| latency, `fast` mode | 51 ms |
+| latency, median / p95 | 206 ms / 225 ms |
+
+Accuracy is hardware-independent and reproduces to the digit on both of our
+machines. **Latency is not, so it is quoted for one named machine:** the figures
+above are from `results/full_324.csv` on an Apple Silicon Mac. The same run on
+Windows 11 / AMD Zen 3 gives 356 ms / 363 ms — 1.7x slower, with the gap
+concentrated in FFT-heavy work rather than spread evenly. Any latency figure
+that reaches a slide should carry the machine with it.
 
 The unanchored result is the honest one and not a defect. An unanchored
 reference is a periodic patch with no aperiodic feature in frame, so the
@@ -78,10 +84,12 @@ Two results worth stating plainly:
   at `pose=large`. Rotation and scale estimation is not yet implemented, so
   rotated pairs are matched at nominal pose.
 
-Latency is dominated by one stage: scoring the reference's uniqueness map costs
-216 ms of the 356 ms call (60.6%). It depends only on the reference, so a repeat
-visit to the same site is served from cache; the figure above is the cold cost,
-which is what a benchmark over distinct references measures.
+Latency is dominated by one stage: scoring the reference's uniqueness map is
+**60.6% of the call**. That share is the portable number — it holds on either
+machine, where the absolute milliseconds do not. The map depends only on the
+reference, so a repeat visit to the same site is served from cache; the figures
+above are the cold cost, which is what a sweep over 324 distinct references
+measures.
 
 ## How it works
 

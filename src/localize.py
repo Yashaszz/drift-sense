@@ -664,14 +664,22 @@ def _should_escalate(diagnostics: Diagnostics, tier: Mode) -> bool:
     for NaN — accepting an answer precisely when there is no evidence for it.
     Unknown escalates.
 
-    The thresholds themselves are provisional. Measured on the first twelve
-    generated pairs, PSR ranged 1.77-3.08 on correct answers and 1.44-3.41 on
-    wrong ones: it does not yet separate the two, and the highest value in the
-    set belonged to a wrong answer. That is an honest reading rather than a
-    defect — an unweighted correlation surface over a periodic lattice really
-    does have no dominant peak, which is what Stage 4a uniqueness weighting
-    exists to fix. Until that lands, and until the dataset carries physics,
-    every case escalates: slower, but never falsely confident.
+    The thresholds are tuned rather than provisional, and the tuning concluded
+    that they should not move. Measured over 324 pairs carrying the full SEM
+    physics chain, PSR runs 1.51-12.31 with a median of 2.25, and it barely
+    separates outcomes: median 2.33 on correct answers against 2.22 on wrong
+    ones, ``AUC(psr -> correct) = 0.581``.
+
+    Because the statistic does not discriminate, no threshold buys latency
+    without paying accuracy. Sweeping the accept threshold against a fast-tier
+    counterfactual: 8.0 stops 0.3% of cases at 42.6% accuracy with zero false
+    accepts; 3.0 stops 11.7% at 42.3% with 21; 2.0 stops 57.7% at 39.8% with
+    114. 8.0/4.0 is retained as the only setting that never accepts a wrong
+    answer, at the cost of 320 of 324 pairs escalating to the ambiguous tier.
+
+    That is a property of the evidence rather than a defect. Fixing it needs a
+    statistic that separates the two populations — see the anchoredness finding
+    in ``docs/r4_handoff.md`` — not a different number here.
     """
     if tier == "ambiguous":
         return False

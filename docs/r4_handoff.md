@@ -39,9 +39,18 @@ no load or run failures, `failure_mode: none` throughout.
 | accuracy, **anchored** references | **85.2%** (138/162) |
 | accuracy, unanchored references | 0.0% |
 | median error, anchored | 0.042 px |
-| auto-mode latency, median / p95 | 356 ms / 363 ms |
-| `fast`-mode latency, median | 51 ms |
+| auto-mode latency, median / p95 | 206 ms / 225 ms (Mac) · 356 / 363 (Windows) |
+| `fast`-mode latency, median | 51 ms (Windows) |
 | confidence, cross-validated AUC | 0.570 |
+
+**Latency is quoted per machine and accuracy is not, because only one of them
+varies.** Accuracy reproduces to the digit across both of our machines. Latency
+does not: the same 324 pairs run 206 ms median on R3's Apple Silicon Mac
+(`results/full_324.csv`) and 356 ms on R4's Windows 11 / AMD Zen 3, a 1.7x gap.
+Harness overhead is ruled out — wall-clock and `Diagnostics.elapsed_ms` agree to
+0.11 ms — so it is the machine. The README quotes the Mac figure because R3 owns
+the evaluation harness and its CSVs are the tracked evidence; the stage table
+below is Windows. **Any latency number on a slide must name its machine.**
 
 The anchored/unanchored split is the central result and is not a defect. An
 unanchored reference is a periodic patch with no aperiodic feature in frame; the
@@ -96,7 +105,8 @@ statistic, not the number.
 
 Per-stage, from `Diagnostics.stage_ms` (enable with
 `config.COLLECT_STAGE_TIMINGS`). Cold, which is what a sweep over distinct
-references measures.
+references measures. Absolute figures are Windows 11 / AMD Zen 3; **the
+percentage column is the portable one** and should be what gets quoted.
 
 | stage | mean ms | % of call |
 |---|---:|---:|
