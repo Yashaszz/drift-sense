@@ -3,7 +3,8 @@
 **Purpose:** persistent context for R3 (Disambiguation & Evidence). Upload to
 project knowledge so code state does not have to be re-pasted each session.
 
-**Last synced:** 2026-08-12, after the 324-pair sweep and the PR #14 rebase.
+**Last synced:** 2026-08-13, after `citations.md` and the README refresh.
+Open work is §7; it is the list, not this header.
 **Repo:** `~/Developer/drift-sense` · **Teammates:** R1 geometry/dataset, R2 physics/pose, R4 matcher/delivery
 
 ---
@@ -170,25 +171,56 @@ and `src/ablate.py` are complete, with 324-pair outputs tracked under `results/`
 They were previously listed here as open. PR #14 is rebased onto `main`, CI
 green, blocked only on review approval.
 
-Still open:
+**Done Aug 13:**
 
-1. ~~`docs/citations.md`~~ — **done**, 31 sources, tiered [C]/[M]/[A] so a
-   cited mechanism is never confused with a chosen constant. §4 lists the five
-   uncited assumptions in one place; §6 records which entries were checked
-   against the publisher record on Aug 13 and which were not.
-2. Citation audit across all docs — the remaining half of this item. Every
-   figure quoted in `README.md` is still from the 108 set, and the README says
-   the SEM chain is not implemented.
-3. Confidence-vs-accuracy calibration plot (Phase 3). Expect it flat — see §5
-   of `failure_analysis.md`.
-4. Open for R4: cache the uniqueness map per reference; re-fit the confidence
-   calibrator now that `uniqueness_score` populates (their counterfactual put
-   CV AUC at 0.506 → 0.926).
-5. **Uniqueness weighting contributes nothing to final accuracy on 324.** The
-   ablation reads `selected` 0.417 and `weighted` 0.417 — identical to the digit
-   on both success and median error — while recall finds the peak in 8 more
-   cases weighted than unweighted. The gain exists at ranking and dies before
-   the final answer. Diagnose before the deck.
+- `docs/citations.md` (59ebb06) — 31 sources, tiered **[C]** cited mechanism
+  and magnitude / **[M]** cited mechanism, our number / **[A]** uncited
+  assumption, so a citation can never dress up a guessed constant. §4 lists
+  the five uncited assumptions in one place; §6 records which seven entries
+  were checked against the publisher record on Aug 13 and which were not.
+  The two deviations it states outright: layout pitches are 3–10x coarser
+  than production (a sampling constraint — a real 40 nm pitch aliases at
+  10 nm/px), and the scan-artifact model is intensity-only, so the dataset is
+  easier than a real tool by the amount of its geometric drift.
+- `README.md` (3578746) — now on the 324 numbers, each recomputed from the
+  tracked CSVs. Dropped two claims that could not be reproduced from anything
+  tracked: "903 positions score exactly the maximum" and "0.01 px sub-pixel on
+  known shifts", both traced to `docs/r4_handoff.md`.
+- **Resolved, was item 5:** uniqueness weighting *does* contribute — +0.080 on
+  the anchored stratum. The 0.417/0.417 reading was the unanchored half, pinned
+  at 0.000 by construction, halving the visible effect with rounding hiding the
+  rest. See §9's caveat. **Always cite the anchored stratum for the ablation.**
+
+**Open — mine, nothing blocking:**
+
+1. **`dataset_control/` is untracked *and* unignored.** `.gitignore` covers
+   `dataset/`, `dataset_holdout/` and the `dataset_full` carve-out but not this
+   one, so a `git add -A` would commit 324 pairs of images. Mirror the
+   `dataset_full` treatment: ignore the tree, keep `dataset_manifest.json` and
+   `ground_truth.jsonl` tracked as provenance.
+2. **`src/disambiguate.py:36-38` module docstring is stale** — still says
+   `uniqueness_map` returns uniform weights and `select_candidate` returns the
+   strongest peak. Both untrue since PR #13.
+3. **Deck, zip and clean-machine test (Aug 15).** None started by anyone. The
+   clean-machine unzip-and-run is the single highest-value packaging task and
+   has never been done — `docs/r4_handoff.md` flags it too.
+
+**Open — waiting on someone else:**
+
+4. **PR #14** (`r3-recall-baseline`, this branch) — mergeable, CI green,
+   `REVIEW_REQUIRED` since Aug 11. Everything above is stacked on it.
+5. **Confidence-vs-accuracy calibration plot (Phase 3)** — needs R4's
+   calibrator re-fit now that `uniqueness_score` populates (their counterfactual
+   put CV AUC at 0.506 → 0.926). PR #21 is **approved but unmerged**; that is
+   the nearest unblock. Expect the plot flat — see §5 of `failure_analysis.md`.
+6. **PR #15** (`refine: bool` on `localize()`) — open, review required. Until it
+   lands, the sub-pixel ablation row comes from `uniqueness_on.csv` instead of
+   the same harness as the other three rows.
+7. **`docs/r4_handoff.md:30-41` still leads with 108-set figures** (77.8%,
+   105 ms, 38.9%) and is the last place in the repo presenting them as current
+   — and the file R4 hands to whoever builds the deck. R4's document: message
+   them, do not edit it.
+8. Also open for R4: cache the uniqueness map per reference.
 
 ---
 
