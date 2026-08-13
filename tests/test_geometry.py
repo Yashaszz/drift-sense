@@ -5,6 +5,8 @@ They are regression guards, not coverage filler.
 """
 
 import shutil
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -705,3 +707,52 @@ def test_summary_fails_when_every_pair_runs_to_the_same_rail():
 
     assert summary.verdict == "failed"
     assert "probe range" in summary.detail
+
+
+# ---------------------------------------------------------------------------
+# Provenance files must survive .gitignore
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dataset_dir", ["dataset_full", "dataset_control"])
+def test_provenance_records_are_not_ignored(dataset_dir):
+    """The manifest and ground truth must stay trackable; the images must not.
+
+    A results file is traceable to its data only through these two records, and
+    an ignored directory takes them with it -- git cannot re-include a file whose
+    parent directory is excluded. That defect has now happened twice: once for
+    dataset_full, and again for dataset_control, where a bare `dataset_control/`
+    line silently defeated the negations added beneath it.
+    """
+    repo = Path(__file__).resolve().parents[1]
+
+    if not (repo / ".git").exists():
+        # The submission ships as a zip, so the graders run this suite outside a
+        # checkout. There are no ignore rules to query there and nothing to
+        # protect, but `git check-ignore` still fails, and the assertions below
+        # would report that failure as an ignore-rule defect.
+        pytest.skip("not a git checkout; there are no ignore rules to query")
+
+    def ignored(rel: str) -> bool:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", rel],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        # 0 means ignored and 1 means not ignored; anything else is git
+        # declining to answer. Collapsing that into `== 0` reads "could not
+        # tell" as "not ignored", which passes the two assertions expecting
+        # False and then fails the one expecting True -- pointing at the
+        # .gitignore rules rather than at the broken query.
+        if completed.returncode not in (0, 1):
+            pytest.fail(
+                f"git check-ignore could not answer for {rel!r}: "
+                f"exit {completed.returncode}. {completed.stderr.strip()}"
+            )
+        return completed.returncode == 0
+
+    assert not ignored(f"{dataset_dir}/dataset_manifest.json")
+    assert not ignored(f"{dataset_dir}/ground_truth.jsonl")
+    assert ignored(f"{dataset_dir}/reference/any.png")

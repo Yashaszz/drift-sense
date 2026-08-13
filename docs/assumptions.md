@@ -114,18 +114,23 @@ Defined at `generate_dataset.py:143` and `:146`; ranges follow from
 
 ### What real silicon uses
 
-| Process | Fin pitch | Gate pitch (CPP) | Source |
-|---|---|---|---|
-| Intel 14 nm | 42 nm | — | Bohr, *14 nm Process Technology*, IDF 2014 |
-| Intel 22FFL | 45 nm | ~108 nm | IEDM 2017, via WikiChip Fuse |
-| Intel 22 nm | ~60 nm | ~90 nm | Intel 22 nm SoC platform paper, IEDM 2012 |
-| DRAM (recent) | — | ~60–80 nm pitch (30–40 nm half-pitch) | industry reporting — **needs a primary source** |
+| Process | Fin pitch | Gate pitch (CPP) | Source | Status |
+|---|---|---|---|---|
+| Intel 22 nm SoC | **60 nm** | **90 nm** (108 relaxed) | Jan et al., IEDM 2012 | **confirmed from primary** |
+| Intel 14 nm | 42 nm | — | Bohr, IDF 2014 | search summary only |
+| Intel 22FFL | 45 nm | ~108 nm | IEDM 2017 via WikiChip | search summary only |
+| DRAM, current | — | **60–96 nm pitch** (30–48 nm half-pitch) | IRDS 2023 More Moore §5.1 p28 | **confirmed from primary** |
 
-> **Verification status:** these figures come from search summaries of the
-> sources listed in `citations.md`, not from reading each primary document
-> end-to-end. Confirm each against the primary before submission. They are used
-> only as *contrast* to our values, so an error here weakens the framing but
-> does not corrupt the dataset.
+The Intel 22 nm paper also gives M1 pitch 90 nm and gate lengths 30/34/40 nm.
+IRDS adds that some DRAM lines require ~20 nm half-pitch, and defines the cell
+size factor `a = [cell size]/[half pitch]^2`, 6F2 today against a 4F2 limit.
+
+> **Verification status:** the two rows marked *confirmed* were extracted from
+> the primary PDFs and are quoted verbatim in `docs/citations_layout.md` —
+> those are the ones to cite. The Intel 14 nm and 22FFL rows still come from
+> search summaries and are not needed for the argument; drop them rather than
+> cite them unverified. Every figure here is used only as *contrast* to our
+> values, so an error weakens the framing without corrupting the dataset.
 
 ### Why we relaxed them — the actual justification
 
@@ -135,30 +140,36 @@ surviving into the search image:
 
 | Feature | Period | px/period | Contrast retained |
 |---|---|---|---|
-| Intel 14 nm fin pitch | 42 nm | 4.2 | **20.0%** |
-| Intel 22FFL fin pitch | 45 nm | 4.5 | 24.6% |
-| Intel 22 nm fin pitch | 60 nm | 6.0 | 45.4% |
+| Intel 22 nm fin pitch *(confirmed)* | 60 nm | 6.0 | **45.4%** |
+| Intel 22 nm gate / M1 pitch *(confirmed)* | 90 nm | 9.0 | 70.4% |
+| IRDS DRAM, 30 nm half-pitch *(confirmed)* | 60 nm | 6.0 | **45.4%** |
+| IRDS DRAM, 48 nm half-pitch *(confirmed)* | 96 nm | 9.6 | 73.5% |
+| Intel 14 nm fin pitch *(unverified)* | 42 nm | 4.2 | 20.0% |
 | **Ours, FinFET fin (min)** | 72 nm | 7.2 | **57.8%** |
 | **Ours, FinFET fin (nom)** | 90 nm | 9.0 | 70.4% |
 | **Ours, FinFET fin (max)** | 108 nm | 10.8 | 78.4% |
-| Real DRAM pitch | ~70 nm | 7.0 | 56.0% |
-| **Ours, DRAM pitch (nom)** | 180 nm | 18.0 | 91.6% |
+| **Ours, DRAM pitch (min)** | 144 nm | 14.4 | 87.2% |
+| **Ours, DRAM pitch (max)** | 216 nm | 21.6 | 94.1% |
 
-At leading-edge dimensions the fin lattice reaches the search image at **20%
-contrast before any noise is added**. Under the `high` stratum — dose scaled to
-0.35 of R2's search preset — that signal is at or below the shot-noise floor,
-and the search capture carries essentially no fin information. The task would
-not be hard; it would be ill-posed, and every unanchored FinFET pair would fail
+Every confirmed real dimension lands at **45–74% contrast**, against our
+**58–94%**. At the tighter end of the DRAM ground rules — 30 nm half-pitch, a
+60 nm pitch — the lattice reaches the search image at 45% contrast *before any
+noise is added*. Under the `high` stratum, where dose is scaled to 0.35 of R2's
+search preset, that margin is thin; at the unverified Intel 14 nm fin pitch it
+falls to 20% and is at or below the shot-noise floor entirely. The task would
+not be hard, it would be ill-posed, and every unanchored FinFET pair would fail
 for reasons that say nothing about the matcher.
 
-Relaxing to 72–108 nm keeps the periodic structure resolvable (58–78% contrast)
-while still sitting well below DRAM's 87–94%, so FinFET remains the harder
-architecture for the reason we claim rather than by accident.
+Relaxing keeps the periodic structure resolvable while preserving the ordering
+that matters: our FinFET fins (58–78%) still sit below our DRAM (87–94%), so
+FinFET remains the harder architecture for the reason we claim rather than by
+accident.
 
-**The one-sentence version for the deck:** *dimensions are relaxed ~2x from
-leading-edge silicon so that periodic structure survives the 10 nm/px search
-optic the problem specifies; at true 14 nm-node fin pitch the fins reach the
-search image at 20% contrast and the task stops being well-posed.*
+**The one-sentence version for the deck:** *dimensions are relaxed roughly 2–3x
+from current silicon so periodic structure survives the 10 nm/px search optic
+the problem specifies; at real DRAM ground rules the lattice reaches the search
+image at 45% contrast and at leading-edge fin pitch at 20%, where the task stops
+being well-posed rather than merely hard.*
 
 Nyquist is not the binding constraint anywhere — it needs ≥2 px/period and even
 42 nm clears it at 4.2 — so nothing in the dataset aliases. Contrast, not
