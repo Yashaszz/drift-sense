@@ -1,8 +1,15 @@
 # Citations — layout and geometry (R1)
 
-Compiled and audited by R3 against the code (work-split, rule 5: the person who
-picks a number writes its citation). Physics citations are R2's and live beside
-their presets in `src/sem_physics.py`.
+**Scope: layout and sampling geometry only.** Written by R1 under work-split
+rule 5 (whoever picks a number writes its citation). **Not yet audited** — R3
+compiles and audits the project-wide `citations.md`, and this file is intended
+to be folded in as its layout section once both have landed. It is deliberately
+named `citations_layout.md` to avoid a whole-file collision with that add.
+
+Physics parameters are R2's and are **not** yet cited anywhere:
+`src/sem_physics.py` states at line 6 that its presets "must be tuned against
+the evaluation strata and replaced (or supported) by literature citations before
+final submission". That work is outstanding, not filed elsewhere.
 
 **Status of this file:** the references below were located via web search and
 are recorded with working URLs. **Each still needs to be opened and the quoted

@@ -13,6 +13,7 @@ fixed that in commit b07667a; the tests remain because the failure was silent â€
 
 import inspect
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -268,8 +269,16 @@ def test_psr_uses_its_own_exclusion_radius_not_the_nms_one():
     """
     source = Path(inspect.getfile(localize)).read_text(encoding="utf-8")
 
+    # Every occurrence, not just the first: a second call site added later with
+    # the wrong constant is precisely the regression this guards against, and
+    # str.index would walk straight past it.
+    checked = 0
     for call in ("sidelobe_stats", "peak_to_sidelobe"):
-        start = source.index(f"disambiguate.{call}(")
-        window = source[start : start + 400]
-        assert "PSR_EXCLUSION_RADIUS_PX" in window, f"{call} must use the PSR radius"
-        assert "DEFAULT_NMS_RADIUS_PX" not in window, f"{call} must not use the NMS radius"
+        needle = f"disambiguate.{call}("
+        for match in re.finditer(re.escape(needle), source):
+            window = source[match.start() : match.start() + 400]
+            assert "PSR_EXCLUSION_RADIUS_PX" in window, f"{call} must use the PSR radius"
+            assert "DEFAULT_NMS_RADIUS_PX" not in window, f"{call} must not use the NMS radius"
+            checked += 1
+
+    assert checked >= 2, f"expected both PSR call sites, found {checked}"

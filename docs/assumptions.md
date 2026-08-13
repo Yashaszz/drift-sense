@@ -9,8 +9,13 @@ citation, a derivation, or an honest "we chose this, here is the consequence if
 it is wrong". A number with none of those three is a defect.
 
 Physics parameters — edge brightening, PSF, shot and read noise, scan artifacts
-— are R2's and are documented beside their presets in `src/sem_physics.py`.
-This file covers geometry and sampling only.
+— are R2's. They are **not yet cited**: `src/sem_physics.py` states at line 6
+that its presets "must be tuned against the evaluation strata and replaced (or
+supported) by literature citations before final submission", and that remains
+open. This file covers geometry and sampling only, and does not stand in for it.
+
+Layout references are collected in `docs/citations_layout.md`, to be folded into
+the project-wide `citations.md` as its layout section.
 
 ## How to read the Source column
 
