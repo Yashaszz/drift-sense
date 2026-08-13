@@ -204,9 +204,20 @@ green, blocked only on review approval.
 2. **`src/disambiguate.py:36-38` module docstring is stale** — still says
    `uniqueness_map` returns uniform weights and `select_candidate` returns the
    strongest peak. Both untrue since PR #13.
-3. **Deck, zip and clean-machine test (Aug 15).** None started by anyone. The
-   clean-machine unzip-and-run is the single highest-value packaging task and
-   has never been done — `docs/r4_handoff.md` flags it too.
+3. **Deck and zip (Aug 15).** Not started by anyone.
+
+   **The clean-machine test is done** — `scripts/clean_room_check.sh`, which
+   unpacks `git archive` (tracked files only, no `.venv`, no dataset, no
+   artefacts), resolves from the lockfile and runs the suite, the linters and
+   the CLI. Passing on 42d0d39: 497 tests, ruff and mypy clean, CLI 0.026 px on
+   a `pose-large` pair. Re-run it against the exact ref you zip.
+
+   It found two things a development tree cannot show you. Five unreferenced
+   CSVs were shipping at the archive root, three of them the superseded 108 set
+   — removed. And the script itself reported success for stages it never
+   reached, twice, because `set -o pipefail` plus `| tail` returns 141 on
+   SIGPIPE; both fixed, and worth remembering before trusting any
+   green output from a bash pipeline.
 
 **Open — waiting on someone else:**
 
