@@ -255,7 +255,8 @@ class PairRecord:
             "anchors_in_reference": self.anchors_in_reference,
             "physics_params": {
                 "noise_level": self.strata["noise_level"],
-                "note": "stub -- R2 pending",
+                "chain": "src.sem_physics.apply_sem_chain",
+                "presets": {"reference": "reference", "search": "search"},
             },
             "seed": self.seed,
         }

@@ -5,6 +5,8 @@ They are regression guards, not coverage filler.
 """
 
 import shutil
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -705,3 +707,31 @@ def test_summary_fails_when_every_pair_runs_to_the_same_rail():
 
     assert summary.verdict == "failed"
     assert "probe range" in summary.detail
+
+
+# ---------------------------------------------------------------------------
+# Provenance files must survive .gitignore
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dataset_dir", ["dataset_full", "dataset_control"])
+def test_provenance_records_are_not_ignored(dataset_dir):
+    """The manifest and ground truth must stay trackable; the images must not.
+
+    A results file is traceable to its data only through these two records, and
+    an ignored directory takes them with it -- git cannot re-include a file whose
+    parent directory is excluded. That defect has now happened twice: once for
+    dataset_full, and again for dataset_control, where a bare `dataset_control/`
+    line silently defeated the negations added beneath it.
+    """
+    repo = Path(__file__).resolve().parents[1]
+
+    def ignored(rel: str) -> bool:
+        return (
+            subprocess.run(["git", "check-ignore", "-q", rel], cwd=repo, check=False).returncode
+            == 0
+        )
+
+    assert not ignored(f"{dataset_dir}/dataset_manifest.json")
+    assert not ignored(f"{dataset_dir}/ground_truth.jsonl")
+    assert ignored(f"{dataset_dir}/reference/any.png")
