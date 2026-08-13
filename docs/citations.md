@@ -46,10 +46,18 @@ Numbered sources are listed in §7.
 | Pitch randomisation | ±20% | **[A]** | From the work-split document, pinned by `tests/test_geometry.py:339`. |
 | Linewidth randomisation | ±15% | **[A]** | As above. |
 
-**The deviation, stated plainly.** These pitches are roughly 3–10× coarser than
-current production. The IRDS tracks DRAM M1 half-pitch and logic metal pitch
-into the sub-20 nm regime [8, 9]; our 180 nm DRAM pitch would have been a
-1990s node. This is deliberate and it is a *sampling* constraint, not a
+**The deviation, stated plainly.** These dimensions are roughly **2–5×
+relaxed** from real silicon, family by family:
+
+| ours | nearest real reference | ratio |
+|---|---|---|
+| fin pitch 90 nm | 60 nm, Intel 22 nm tri-gate [10, 11] | 1.5× |
+| fin pitch 90 nm | 42 nm, Intel 14 nm [11] | 2.1× |
+| gate pitch 420 nm | 90 nm contacted gate pitch, Intel 22 nm [10] | 4.7× |
+| fin width 24 nm | 8 nm, Intel 22 nm [10] | 3.0× |
+| DRAM pitch 180 nm | sub-20 nm-class M1 half-pitch, i.e. sub-40 nm pitch [8, 9] | ~4–5× |
+
+This is deliberate and it is a *sampling* constraint, not a
 modelling claim: the search image is captured at 10 nm/px, so a 40 nm real
 word-line pitch spans 4 px and sits at the Nyquist limit of the image the
 matcher actually receives. The lattice would alias rather than correlate, and
@@ -195,8 +203,9 @@ If you read nothing else in this document:
 1. **No number in `src/sem_physics.py` is calibrated against a real
    instrument.** Every preset constant is `[A]`. Absolute noise levels are not
    a claim; only the *ordering* of the strata is.
-2. **Layout pitches are 3–10× coarser than production**, for the sampling
-   reason in §1. The ambiguity structure is faithful; the node is not.
+2. **Layout dimensions are 2–5× relaxed from production**, for the sampling
+   reason in §1. The ambiguity structure is faithful; the node is not, and no
+   figure here should be presented as matching one.
 3. **The randomisation tolerances are not process tolerances.**
 4. **No geometric scan distortion or drift is modelled** (§2.5), by design, to
    keep ground truth exact. Real SEM data would be harder here.
