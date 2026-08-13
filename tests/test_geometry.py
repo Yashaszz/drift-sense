@@ -726,11 +726,32 @@ def test_provenance_records_are_not_ignored(dataset_dir):
     """
     repo = Path(__file__).resolve().parents[1]
 
+    if not (repo / ".git").exists():
+        # The submission ships as a zip, so the graders run this suite outside a
+        # checkout. There are no ignore rules to query there and nothing to
+        # protect, but `git check-ignore` still fails, and the assertions below
+        # would report that failure as an ignore-rule defect.
+        pytest.skip("not a git checkout; there are no ignore rules to query")
+
     def ignored(rel: str) -> bool:
-        return (
-            subprocess.run(["git", "check-ignore", "-q", rel], cwd=repo, check=False).returncode
-            == 0
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", rel],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
         )
+        # 0 means ignored and 1 means not ignored; anything else is git
+        # declining to answer. Collapsing that into `== 0` reads "could not
+        # tell" as "not ignored", which passes the two assertions expecting
+        # False and then fails the one expecting True -- pointing at the
+        # .gitignore rules rather than at the broken query.
+        if completed.returncode not in (0, 1):
+            pytest.fail(
+                f"git check-ignore could not answer for {rel!r}: "
+                f"exit {completed.returncode}. {completed.stderr.strip()}"
+            )
+        return completed.returncode == 0
 
     assert not ignored(f"{dataset_dir}/dataset_manifest.json")
     assert not ignored(f"{dataset_dir}/ground_truth.jsonl")
