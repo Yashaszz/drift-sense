@@ -645,10 +645,17 @@ def _run_pipeline(
         msg = "correlation surface has no distinguishable peak"
         raise _NoCandidatesError(msg)
 
+    # PSR_EXCLUSION_RADIUS_PX, not DEFAULT_NMS_RADIUS_PX. The two are equal at 8
+    # today, so passing the wrong one is currently invisible -- but they measure
+    # different things (correlation main-lobe width versus lattice pitch) and
+    # config.py splits them precisely so they can diverge. Passing the NMS
+    # constant here re-coupled them at the call site, which meant any change to
+    # the NMS radius would silently move every PSR value and every escalation
+    # decision with it.
     sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
         surface,
         peaks[0],
-        exclusion_radius=config.DEFAULT_NMS_RADIUS_PX,
+        exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
     )
 
     # TIE_SIGMA is a width in sidelobe standard deviations; select_candidate
@@ -677,7 +684,7 @@ def _run_pipeline(
         diagnostics.psr = disambiguate.peak_to_sidelobe(
             surface,
             best,
-            exclusion_radius=config.DEFAULT_NMS_RADIUS_PX,
+            exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
         )
 
     centre_x, centre_y = best.centre(template.shape)
