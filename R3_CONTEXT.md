@@ -17,7 +17,7 @@ project knowledge so code state does not have to be re-pasted each session.
 | `evaluate.py` | R3 | done (PR #11) |
 | `uniqueness_map` / `uniqueness_score` | R3 | **done (PR #13)** — real implementation, `src/uniqueness.py` |
 | `failure_analysis.md` | R3 | **done (PR #13)** — `docs/failure_analysis.md`, 166 lines |
-| `docs/citations.md` | R3 | not started — 30% block, gated on R2's physics chain |
+| `docs/citations.md` | R3 | **done** — 30% block, written against R2's real chain |
 | `R3_CONTEXT.md` refresh | R3 | this document |
 | T8 uniqueness-weighted correlation | R4 | done, live |
 | T9 profiling and caching | R4 | done |
@@ -172,9 +172,13 @@ green, blocked only on review approval.
 
 Still open:
 
-1. `docs/citations.md` — 30% augmentation-realism block. **Unblocked**: R2's
-   chain is real, so augmentation realism is now citable.
-2. Citation audit across all docs.
+1. ~~`docs/citations.md`~~ — **done**, 31 sources, tiered [C]/[M]/[A] so a
+   cited mechanism is never confused with a chosen constant. §4 lists the five
+   uncited assumptions in one place; §6 records which entries were checked
+   against the publisher record on Aug 13 and which were not.
+2. Citation audit across all docs — the remaining half of this item. Every
+   figure quoted in `README.md` is still from the 108 set, and the README says
+   the SEM chain is not implemented.
 3. Confidence-vs-accuracy calibration plot (Phase 3). Expect it flat — see §5
    of `failure_analysis.md`.
 4. Open for R4: cache the uniqueness map per reference; re-fit the confidence
