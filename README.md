@@ -47,24 +47,49 @@ on a real tool needs an answer plus an honest quality signal, not an exception.
 
 ## Results
 
-Measured on 108 stratified synthetic pairs at the 1 px (10 nm) tolerance.
+Measured on 324 stratified pairs carrying the full SEM physics chain — edge
+brightening, PSF blur, Poisson shot noise and read noise, applied independently
+per capture — at the 1 px (10 nm) tolerance. All 324 scored; none failed.
 
 | | |
 |---|---|
-| accuracy, **anchored** references | **77.8%** |
+| accuracy, **anchored** references | **85.2%** (138/162) |
 | accuracy, unanchored references | 0.0% |
-| accuracy, all pairs | 38.9% |
-| latency, median / p95 | 105 ms / 146 ms |
-| sub-pixel accuracy on known shifts | 0.01 px |
+| accuracy, all pairs | 42.6% |
+| median error, anchored | **0.042 px** |
+| latency, median / p95 | 206 ms / 225 ms |
+
+Accuracy is hardware-independent and reproduces to the digit on both of our
+machines. **Latency is not, so it is quoted for one named machine:** the figures
+above are from `results/full_324.csv` on an Apple Silicon Mac. The same run on
+Windows 11 / AMD Zen 3 gives 356 ms / 363 ms — 1.7x slower, with the gap
+concentrated in FFT-heavy work rather than spread evenly. Any latency figure
+that reaches a slide should carry the machine with it.
 
 The unanchored result is the honest one and not a defect. An unanchored
-reference is a periodic patch with no aperiodic feature in frame; on a bare
-lattice **903 distinct positions score exactly the maximum**, so the evidence
-does not identify a location. That is an information-theoretic limit, and the
-correct response is to answer and flag rather than to claim success.
+reference is a periodic patch with no aperiodic feature in frame, so the
+correlation evidence does not identify a location: on a bare lattice hundreds of
+distinct positions score exactly the maximum. That is an information-theoretic
+limit rather than an algorithmic one, and the correct response is to answer and
+flag rather than to claim success. Escalating those cases buys **+0.0** accuracy;
+on anchored references the same escalation buys +7.4 points.
 
-These numbers are measured on geometry-only data — the SEM physics chain is not
-yet implemented — and will move once noise, blur and edge brightening land.
+Two results worth stating plainly:
+
+- **The physics chain did not cost accuracy.** Anchored accuracy is unchanged
+  from the geometry-only dataset. Across noise strata it is 83.3% / 83.3% /
+  88.9% for low / medium / high — ZNCC is normalised, so the current noise
+  magnitudes do not move it.
+- **Pose is the dominant degradation axis.** 48.1% at `pose=none` against 33.3%
+  at `pose=large`. Rotation and scale estimation is not yet implemented, so
+  rotated pairs are matched at nominal pose.
+
+Latency is dominated by one stage: scoring the reference's uniqueness map is
+**60.6% of the call**. That share is the portable number — it holds on either
+machine, where the absolute milliseconds do not. The map depends only on the
+reference, so a repeat visit to the same site is served from cache; the figures
+above are the cold cost, which is what a sweep over 324 distinct references
+measures.
 
 ## How it works
 
@@ -91,7 +116,7 @@ behind them, and `benchmarks/README.md` to reproduce every number.
 
 ```
 src/          pipeline modules; localize.py is the deliverable
-tests/        474 tests
+tests/        498 tests
 benchmarks/   reproducible timing, accuracy and calibration reports
 docs/         engineering notes and handoff
 ```

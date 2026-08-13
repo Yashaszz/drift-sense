@@ -41,8 +41,11 @@ here.
 """
 
 import argparse
+import hashlib
 import time
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -79,6 +82,107 @@ centre, so acting on an untrustworthy estimate is worse than ignoring it:
 assuming nominal is at least unbiased. Tuned against the pose-quality
 distribution once R2's estimator produces real values.
 """
+
+
+_UniquenessKey: TypeAlias = tuple[object, int, bytes]
+"""Implementation, tile size, and reference content. See :func:`_uniqueness_for`."""
+
+_UNIQUENESS_CACHE: "OrderedDict[_UniquenessKey, FloatArray]" = OrderedDict()
+"""Uniqueness maps from previous calls, newest last. See :func:`_uniqueness_for`."""
+
+
+def _reference_digest(reference: FloatArray) -> bytes:
+    """Fingerprint a reference image by content.
+
+    Identity is the wrong key: callers routinely pass a fresh array read from
+    disk for the same physical site, and two equal arrays must hit the same
+    entry. Content hashing costs about 3 ms on a 1000x1000 float32 reference
+    against the 400 ms it guards, and ``shape`` is folded in so that two arrays
+    sharing a buffer layout but not a shape cannot collide.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(repr(reference.shape).encode())
+    digest.update(np.ascontiguousarray(reference).view(np.uint8).reshape(-1).tobytes())
+    return digest.digest()
+
+
+def _uniqueness_for(reference: FloatArray) -> FloatArray:
+    """Return R3's uniqueness map for a reference, reusing a recent computation.
+
+    Measured at production shapes, ``uniqueness_map`` is 411 ms of a 647 ms
+    ``localize`` call — 68% of runtime, and the single largest cost in the
+    pipeline. It scores the *reference* alone, so it is invariant to everything
+    the escalation ladder varies and to the search image entirely.
+
+    :class:`_StageCache` already memoises it within one call. This is the tier
+    above: a bounded, process-wide cache so that repeat visits to the same site
+    pay for it once. That is the shape of the real workload — a wafer tool
+    revisits a site, and every ablation sweep runs one pair through several
+    configurations — where the per-call cache is by construction cold.
+
+    A distinct reference every call, as in a 108-pair benchmark sweep, gets no
+    benefit and pays only the digest. That is the intended trade.
+
+    The key carries the *implementation* alongside the content, because the
+    reference does not determine the map on its own — the function that scored
+    it does. ``benchmarks/verify_uniqueness_integration.py`` substitutes a
+    stand-in map to measure what R3's stage is worth, and an ablation sweep does
+    the same; keying on content alone would serve the real map to a run that
+    asked for the stand-in and quietly report the two as identical. Tile size is
+    in the key for the same reason.
+
+    Returns the cached array itself rather than a copy. Callers treat the map as
+    read-only; :func:`src.matcher.build_weight` does not mutate it.
+    """
+    implementation = disambiguate.uniqueness_map
+    tile = config.DEFAULT_UNIQUENESS_TILE_PX
+
+    if config.UNIQUENESS_CACHE_ENTRIES <= 0:
+        return implementation(reference, tile=tile)
+
+    key: _UniquenessKey = (implementation, tile, _reference_digest(reference))
+    hit = _UNIQUENESS_CACHE.get(key)
+    if hit is not None:
+        _UNIQUENESS_CACHE.move_to_end(key)
+        return hit
+
+    computed = implementation(reference, tile=tile)
+    _UNIQUENESS_CACHE[key] = computed
+    while len(_UNIQUENESS_CACHE) > config.UNIQUENESS_CACHE_ENTRIES:
+        _UNIQUENESS_CACHE.popitem(last=False)
+    return computed
+
+
+@contextmanager
+def _stage_timer(diagnostics: Diagnostics, stage: str) -> Iterator[None]:
+    """Accumulate wall-clock time for one stage into the diagnostics record.
+
+    Accumulates rather than assigns: a stage runs once per escalation tier, and
+    what matters for optimisation is what the *call* spent there in total. A
+    stage served from :class:`_StageCache` contributes nothing on the tier that
+    hit, which is what makes the caching visible in the breakdown.
+
+    Costs a ``perf_counter`` pair per stage when enabled and a single boolean
+    test when not, so the shipped path is unaffected.
+    """
+    if not config.COLLECT_STAGE_TIMINGS:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = (time.perf_counter() - started) * 1000.0
+        diagnostics.stage_ms[stage] = diagnostics.stage_ms.get(stage, 0.0) + elapsed
+
+
+def clear_uniqueness_cache() -> None:
+    """Drop every cached uniqueness map.
+
+    Exposed for benchmarks, which must measure a cold computation, and for tests
+    that assert on call counts.
+    """
+    _UNIQUENESS_CACHE.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,13 +370,13 @@ class _StageCache:
         Notes
         -----
         Scoring the reference depends on nothing that varies between tiers, so
-        it is memoised alongside the PSF estimate.
+        it is memoised alongside the PSF estimate. The process-wide cache behind
+        :func:`_uniqueness_for` extends the same reuse across calls; this
+        attribute stays because it avoids re-hashing the reference on every
+        tier.
         """
         if self._uniqueness is None:
-            self._uniqueness = disambiguate.uniqueness_map(
-                self._reference,
-                tile=config.DEFAULT_UNIQUENESS_TILE_PX,
-            )
+            self._uniqueness = _uniqueness_for(self._reference)
         return self._uniqueness
 
     def uniqueness_is_informative(self) -> bool:
@@ -560,21 +664,28 @@ def _should_escalate(diagnostics: Diagnostics, tier: Mode) -> bool:
     for NaN — accepting an answer precisely when there is no evidence for it.
     Unknown escalates.
 
-    The thresholds themselves are provisional. Measured on the first twelve
-    generated pairs, PSR ranged 1.77-3.08 on correct answers and 1.44-3.41 on
-    wrong ones: it does not yet separate the two, and the highest value in the
-    set belonged to a wrong answer. That is an honest reading rather than a
-    defect — an unweighted correlation surface over a periodic lattice really
-    does have no dominant peak, which is what Stage 4a uniqueness weighting
-    exists to fix. Until that lands, and until the dataset carries physics,
-    every case escalates: slower, but never falsely confident.
+    The thresholds are tuned rather than provisional, and the tuning concluded
+    that they should not move. Measured over 324 pairs carrying the full SEM
+    physics chain, PSR runs 1.51-12.31 with a median of 2.25, and it barely
+    separates outcomes: median 2.33 on correct answers against 2.22 on wrong
+    ones, ``AUC(psr -> correct) = 0.581``.
+
+    Because the statistic does not discriminate, no threshold buys latency
+    without paying accuracy. Sweeping the accept threshold against a fast-tier
+    counterfactual: 8.0 stops 0.3% of cases at 42.6% accuracy with zero false
+    accepts; 3.0 stops 11.7% at 42.3% with 21; 2.0 stops 57.7% at 39.8% with
+    114. 8.0/4.0 is retained as the only setting that never accepts a wrong
+    answer, at the cost of 320 of 324 pairs escalating to the ambiguous tier.
+
+    That is a property of the evidence rather than a defect. Fixing it needs a
+    statistic that separates the two populations — see the anchoredness finding
+    in ``docs/r4_handoff.md`` — not a different number here.
     """
     if tier == "ambiguous":
         return False
     if not np.isfinite(diagnostics.psr):
         return True
-    threshold = config.PSR_ACCEPT_THRESHOLD if tier == "fast" else config.PSR_AMBIGUOUS_THRESHOLD
-    return bool(diagnostics.psr < threshold)
+    return bool(diagnostics.psr < config.get_thresholds().for_tier(tier))
 
 
 def _run_pipeline(
@@ -621,7 +732,8 @@ def _run_pipeline(
     # unweighted, so paying for it would buy nothing. Resolving the flag here
     # keeps the cache key honest: the two paths share an entry precisely when
     # they produce the same surface.
-    effective_weighting = weighted and cache.uniqueness_is_informative()
+    with _stage_timer(diagnostics, "uniqueness_map"):
+        effective_weighting = weighted and cache.uniqueness_is_informative()
 
     if weighted:
         # Set before the cache lookup, and outside the cached outcome, because
@@ -640,7 +752,8 @@ def _run_pipeline(
         # the same numbers at full cost.
         return cached.apply(diagnostics)
 
-    template, surface, peaks = cache.correlate(*key)
+    with _stage_timer(diagnostics, "correlate"):
+        template, surface, peaks = cache.correlate(*key)
     if not peaks:
         msg = "correlation surface has no distinguishable peak"
         raise _NoCandidatesError(msg)
@@ -652,23 +765,25 @@ def _run_pipeline(
     # constant here re-coupled them at the call site, which meant any change to
     # the NMS radius would silently move every PSR value and every escalation
     # decision with it.
-    sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
-        surface,
-        peaks[0],
-        exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
-    )
+    with _stage_timer(diagnostics, "sidelobe_stats"):
+        sidelobe_mean, sidelobe_std = disambiguate.sidelobe_stats(
+            surface,
+            peaks[0],
+            exclusion_radius=config.PSR_EXCLUSION_RADIUS_PX,
+        )
 
     # TIE_SIGMA is a width in sidelobe standard deviations; select_candidate
     # takes score units and never sees the surface, so convert here.
     tolerance = config.TIE_SIGMA * sidelobe_std
 
-    tied = disambiguate.tied_candidates(peaks, tolerance)
-    best, tie_break_used = disambiguate.select_candidate(
-        peaks,
-        config.image_centre(search.shape),
-        template.shape,
-        tolerance=tolerance,
-    )
+    with _stage_timer(diagnostics, "select_candidate"):
+        tied = disambiguate.tied_candidates(peaks, tolerance)
+        best, tie_break_used = disambiguate.select_candidate(
+            peaks,
+            config.image_centre(search.shape),
+            template.shape,
+            tolerance=tolerance,
+        )
     diagnostics.n_tied = len(tied)
     diagnostics.tie_break_used = tie_break_used
     diagnostics.ncc_peak = best.score
@@ -689,13 +804,14 @@ def _run_pipeline(
 
     centre_x, centre_y = best.centre(template.shape)
 
-    refinement = matcher.refine_subpixel_detailed(
-        template,
-        search,
-        best,
-        surface=surface,
-        upsample=config.DEFAULT_UPSAMPLE,
-    )
+    with _stage_timer(diagnostics, "refine_subpixel"):
+        refinement = matcher.refine_subpixel_detailed(
+            template,
+            search,
+            best,
+            surface=surface,
+            upsample=config.DEFAULT_UPSAMPLE,
+        )
     outcome = _TierOutcome(
         centre=(centre_x + refinement.dx, centre_y + refinement.dy),
         n_tied=len(tied),
@@ -807,10 +923,16 @@ def localize(
         cache = _StageCache(search_f, reference_f)
 
         centre_x = centre_y = 0.0
+        # One dict shared by every tier's record, so the breakdown reports what
+        # the whole call spent in each stage rather than only the tier that
+        # happened to answer.
+        stage_ms = diagnostics.stage_ms
         for tier in _escalation_path(mode):
-            diagnostics = Diagnostics(mode_used=tier)
-            pose_estimate = _resolve_pose(search_f, reference_f, tier)
-            psf_sigma = cache.psf_sigma(tier)
+            diagnostics = Diagnostics(mode_used=tier, stage_ms=stage_ms)
+            with _stage_timer(diagnostics, "pose"):
+                pose_estimate = _resolve_pose(search_f, reference_f, tier)
+            with _stage_timer(diagnostics, "psf_sigma"):
+                psf_sigma = cache.psf_sigma(tier)
             # Uniqueness weighting is the payload of escalation, not the default:
             # it costs three correlations instead of one, and it only helps when
             # the cheap path has already reported weak evidence.

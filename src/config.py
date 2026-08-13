@@ -24,6 +24,9 @@ Conventions adopted (all provisional)
 - Accuracy tolerances measured in *search*-image pixels (10 nm each).
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from typing import Final
 
 # ---------------------------------------------------------------------------
@@ -109,11 +112,126 @@ DEFAULT_PSF_SIGMA_PX: Final[float] = 1.0
 DEFAULT_UNIQUENESS_TILE_PX: Final[int] = 64
 """Tile edge length for the Stage 4a uniqueness map, in reference pixels."""
 
+UNIQUENESS_CACHE_ENTRIES: Final[int] = 4
+"""How many reference uniqueness maps to keep cached process-wide.
+
+Scoring a reference costs about 400 ms at production shapes — 68% of a
+``localize`` call — and depends on the reference alone, so a repeat visit to the
+same site should not pay it twice. Each entry holds one ``float32`` map the size
+of the reference, so four entries is roughly 16 MB at 1000x1000.
+
+Zero disables the cache and restores per-call computation, which is what a
+cold-start benchmark wants.
+"""
+
+COLLECT_STAGE_TIMINGS: bool = False
+"""Whether ``localize`` records a per-stage wall-clock breakdown.
+
+Off by default so the shipped path pays nothing: a tool making thousands of
+moves a day should not be timing itself. Benchmarks and tuning sweeps turn it on
+to get ``Diagnostics.stage_ms`` populated, which is how the uniqueness map was
+identified as 68% of runtime.
+
+Deliberately not ``Final`` — it is a switch, not a constant.
+"""
+
 PSR_ACCEPT_THRESHOLD: Final[float] = 8.0
 """Peak-to-sidelobe ratio above which a match is accepted without escalation."""
 
 PSR_AMBIGUOUS_THRESHOLD: Final[float] = 4.0
 """Peak-to-sidelobe ratio below which the result is treated as ambiguous."""
+
+
+@dataclass(frozen=True, slots=True)
+class Thresholds:
+    """The decision points that govern escalation and the low-confidence flag.
+
+    Grouped into one object because they are not independent: ``psr_accept``
+    sits above ``psr_ambiguous`` by construction, and tuning one without the
+    other produces a ladder whose tiers overlap. Validating them together is
+    the only way to catch that.
+
+    These are the numbers Phase 3 tuning sweeps over. Holding them in a value
+    object rather than reading module constants at each call site means a sweep
+    can vary them per iteration without editing source or reimporting, and means
+    a fitted set can eventually be loaded from disk the way the confidence model
+    already is.
+    """
+
+    psr_accept: float = PSR_ACCEPT_THRESHOLD
+    psr_ambiguous: float = PSR_AMBIGUOUS_THRESHOLD
+
+    def __post_init__(self) -> None:
+        """Reject a ladder whose tiers cannot be ordered."""
+        if not self.psr_accept >= self.psr_ambiguous:
+            msg = (
+                f"psr_accept ({self.psr_accept}) must be >= psr_ambiguous "
+                f"({self.psr_ambiguous}); otherwise the robust tier accepts "
+                "answers the fast tier would have escalated"
+            )
+            raise ValueError(msg)
+
+    def for_tier(self, tier: str) -> float:
+        """Return the PSR a tier must beat to stop escalating.
+
+        Parameters
+        ----------
+        tier
+            Resolved operating mode.
+
+        Returns
+        -------
+        float
+            ``psr_accept`` for the cheap tier, ``psr_ambiguous`` beyond it. The
+            bar drops as the pipeline spends more: having already paid for the
+            expensive path, a weaker peak is the best evidence available.
+        """
+        return self.psr_accept if tier == "fast" else self.psr_ambiguous
+
+
+_ACTIVE_THRESHOLDS: Thresholds = Thresholds()
+
+
+def get_thresholds() -> Thresholds:
+    """Return the thresholds currently in force.
+
+    Read at each decision point rather than captured at import, so that a sweep
+    or a test can change them without reloading the module.
+    """
+    return _ACTIVE_THRESHOLDS
+
+
+def set_thresholds(thresholds: Thresholds) -> None:
+    """Install a new threshold set process-wide.
+
+    Prefer :func:`override_thresholds` where the change is scoped; this exists
+    for a tuned set loaded once at start-up.
+    """
+    global _ACTIVE_THRESHOLDS  # noqa: PLW0603 - one process-wide policy, by design
+    _ACTIVE_THRESHOLDS = thresholds
+
+
+@contextmanager
+def override_thresholds(**changes: float) -> Iterator[Thresholds]:
+    """Temporarily replace one or more thresholds.
+
+    Restores the previous set on exit, including when the body raises, so a
+    sweep that fails partway cannot leave the process mistuned for every test
+    that follows.
+
+    Examples
+    --------
+    >>> with override_thresholds(psr_accept=3.0) as t:
+    ...     t.psr_accept
+    3.0
+    """
+    previous = _ACTIVE_THRESHOLDS
+    set_thresholds(replace(previous, **changes))
+    try:
+        yield _ACTIVE_THRESHOLDS
+    finally:
+        set_thresholds(previous)
+
 
 TIE_SIGMA: Final[float] = 0.0
 """Tie width, in units of the statistic the call site converts from.
