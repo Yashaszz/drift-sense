@@ -27,7 +27,12 @@ revisions of this document were measured on physics-free renders at 108 pairs;
 The overall figure is the less informative of the two. It averages a stratum the
 system solves to four hundredths of a pixel with one that is not solvable at all.
 
-Median end-to-end latency is **206 ms**.
+Median end-to-end latency is **212 ms** (p95 215 ms), measured on
+macOS-26.5.2-arm64 — see `results/full_324.meta.json`, which now travels with
+every results CSV. Latency is a property of the machine: the same 324 pairs
+report 356 ms on R4's Windows laptop and the identical accuracy, and repeat runs
+on one machine vary by a few ms. Accuracy figures are deterministic and
+reproduce to the digit.
 
 ---
 

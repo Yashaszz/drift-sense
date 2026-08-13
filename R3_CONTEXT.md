@@ -3,7 +3,8 @@
 **Purpose:** persistent context for R3 (Disambiguation & Evidence). Upload to
 project knowledge so code state does not have to be re-pasted each session.
 
-**Last synced:** 2026-08-12, after the 324-pair sweep and the PR #14 rebase.
+**Last synced:** 2026-08-13, after `citations.md` and the README refresh.
+Open work is §7; it is the list, not this header.
 **Repo:** `~/Developer/drift-sense` · **Teammates:** R1 geometry/dataset, R2 physics/pose, R4 matcher/delivery
 
 ---
@@ -17,7 +18,7 @@ project knowledge so code state does not have to be re-pasted each session.
 | `evaluate.py` | R3 | done (PR #11) |
 | `uniqueness_map` / `uniqueness_score` | R3 | **done (PR #13)** — real implementation, `src/uniqueness.py` |
 | `failure_analysis.md` | R3 | **done (PR #13)** — `docs/failure_analysis.md`, 166 lines |
-| `docs/citations.md` | R3 | not started — 30% block, gated on R2's physics chain |
+| `docs/citations.md` | R3 | **done** — 30% block, written against R2's real chain |
 | `R3_CONTEXT.md` refresh | R3 | this document |
 | T8 uniqueness-weighted correlation | R4 | done, live |
 | T9 profiling and caching | R4 | done |
@@ -46,7 +47,10 @@ dataset.
 **Never put 0.852 and the old 0.833 in one sentence.** They are different
 datasets (324 with noise vs 108 without), not an improvement.
 
-Latency: median 206 ms end to end on the 324 set.
+Latency: median **212 ms**, p95 215 ms, on the 324 set — **on this Mac**
+(`results/full_324.meta.json`). R4's Windows laptop reports 356 ms on the same
+pairs with identical accuracy. Never quote a latency without its machine; the
+README's block is generated so it cannot be typed without one.
 
 **The +0.049 overall gap against plain NCC is not what disambiguation buys.**
 The baseline is handed nominal pose (θ=0, s=10), which is correct only on the
@@ -170,21 +174,67 @@ and `src/ablate.py` are complete, with 324-pair outputs tracked under `results/`
 They were previously listed here as open. PR #14 is rebased onto `main`, CI
 green, blocked only on review approval.
 
-Still open:
+**Done Aug 13:**
 
-1. `docs/citations.md` — 30% augmentation-realism block. **Unblocked**: R2's
-   chain is real, so augmentation realism is now citable.
-2. Citation audit across all docs.
-3. Confidence-vs-accuracy calibration plot (Phase 3). Expect it flat — see §5
-   of `failure_analysis.md`.
-4. Open for R4: cache the uniqueness map per reference; re-fit the confidence
-   calibrator now that `uniqueness_score` populates (their counterfactual put
-   CV AUC at 0.506 → 0.926).
-5. **Uniqueness weighting contributes nothing to final accuracy on 324.** The
-   ablation reads `selected` 0.417 and `weighted` 0.417 — identical to the digit
-   on both success and median error — while recall finds the peak in 8 more
-   cases weighted than unweighted. The gain exists at ranking and dies before
-   the final answer. Diagnose before the deck.
+- `docs/citations.md` (59ebb06) — 31 sources, tiered **[C]** cited mechanism
+  and magnitude / **[M]** cited mechanism, our number / **[A]** uncited
+  assumption, so a citation can never dress up a guessed constant. §4 lists
+  the five uncited assumptions in one place; §6 records which seven entries
+  were checked against the publisher record on Aug 13 and which were not.
+  The two deviations it states outright: layout pitches are 3–10x coarser
+  than production (a sampling constraint — a real 40 nm pitch aliases at
+  10 nm/px), and the scan-artifact model is intensity-only, so the dataset is
+  easier than a real tool by the amount of its geometric drift.
+- `README.md` (3578746) — now on the 324 numbers, each recomputed from the
+  tracked CSVs. Dropped two claims that could not be reproduced from anything
+  tracked: "903 positions score exactly the maximum" and "0.01 px sub-pixel on
+  known shifts", both traced to `docs/r4_handoff.md`.
+- **Resolved, was item 5:** uniqueness weighting *does* contribute — +0.080 on
+  the anchored stratum. The 0.417/0.417 reading was the unanchored half, pinned
+  at 0.000 by construction, halving the visible effect with rounding hiding the
+  rest. See §9's caveat. **Always cite the anchored stratum for the ablation.**
+
+**Open — mine, nothing blocking:**
+
+1. **`dataset_control/` is untracked *and* unignored.** `.gitignore` covers
+   `dataset/`, `dataset_holdout/` and the `dataset_full` carve-out but not this
+   one, so a `git add -A` would commit 324 pairs of images. Mirror the
+   `dataset_full` treatment: ignore the tree, keep `dataset_manifest.json` and
+   `ground_truth.jsonl` tracked as provenance.
+2. **`src/disambiguate.py:36-38` module docstring is stale** — still says
+   `uniqueness_map` returns uniform weights and `select_candidate` returns the
+   strongest peak. Both untrue since PR #13.
+3. **Deck and zip (Aug 15).** Not started by anyone.
+
+   **The clean-machine test is done** — `scripts/clean_room_check.sh`, which
+   unpacks `git archive` (tracked files only, no `.venv`, no dataset, no
+   artefacts), resolves from the lockfile and runs the suite, the linters and
+   the CLI. Passing on 42d0d39: 497 tests, ruff and mypy clean, CLI 0.026 px on
+   a `pose-large` pair. Re-run it against the exact ref you zip.
+
+   It found two things a development tree cannot show you. Five unreferenced
+   CSVs were shipping at the archive root, three of them the superseded 108 set
+   — removed. And the script itself reported success for stages it never
+   reached, twice, because `set -o pipefail` plus `| tail` returns 141 on
+   SIGPIPE; both fixed, and worth remembering before trusting any
+   green output from a bash pipeline.
+
+**Open — waiting on someone else:**
+
+4. **PR #14** (`r3-recall-baseline`, this branch) — mergeable, CI green,
+   `REVIEW_REQUIRED` since Aug 11. Everything above is stacked on it.
+5. **Confidence-vs-accuracy calibration plot (Phase 3)** — needs R4's
+   calibrator re-fit now that `uniqueness_score` populates (their counterfactual
+   put CV AUC at 0.506 → 0.926). PR #21 is **approved but unmerged**; that is
+   the nearest unblock. Expect the plot flat — see §5 of `failure_analysis.md`.
+6. **PR #15** (`refine: bool` on `localize()`) — open, review required. Until it
+   lands, the sub-pixel ablation row comes from `uniqueness_on.csv` instead of
+   the same harness as the other three rows.
+7. **`docs/r4_handoff.md:30-41` still leads with 108-set figures** (77.8%,
+   105 ms, 38.9%) and is the last place in the repo presenting them as current
+   — and the file R4 hands to whoever builds the deck. R4's document: message
+   them, do not edit it.
+8. Also open for R4: cache the uniqueness map per reference.
 
 ---
 
