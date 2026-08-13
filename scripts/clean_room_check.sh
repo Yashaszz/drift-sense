@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Prove the submission works on a machine that has never seen the project.
+#
+# `git archive` gives exactly what a grader unzips: tracked files only, no
+# .venv, no dataset (gitignored), no trained artefacts. Everything that works
+# in the development tree because of a file git does not carry fails here, and
+# nowhere else. This is the check that catches "works on my machine".
+#
+# It has already caught one: an ignore rule that excluded the results
+# .meta.json sidecars, which would have failed CI on a fresh checkout only.
+#
+# Usage:
+#   bash scripts/clean_room_check.sh [git-ref]     # default: HEAD
+
+set -euo pipefail
+
+REF="${1:-HEAD}"
+ROOT="$(git rev-parse --show-toplevel)"
+CLEAN="$(mktemp -d)"
+trap 'rm -rf "$CLEAN"' EXIT
+
+echo "==> Unpacking $REF into $CLEAN"
+git -C "$ROOT" archive --format=tar "$REF" | tar -x -C "$CLEAN"
+echo "    $(find "$CLEAN" -type f | wc -l | tr -d ' ') tracked files"
+
+echo "==> Resolving the environment from the lockfile"
+(cd "$CLEAN" && uv sync --all-extras >/dev/null)
+
+echo "==> Test suite"
+(cd "$CLEAN" && uv run pytest -q | tail -2)
+
+echo "==> Lint and types"
+(cd "$CLEAN" && uv run ruff check src tests benchmarks && uv run mypy | tail -1)
+
+# The CLI is the deliverable, so it is exercised on images the clean tree has
+# never seen. The dataset is gitignored and absent by design; a grader supplies
+# their own pair, and so do we.
+PAIR="${PAIR:-$(ls "$ROOT"/dataset/reference/*.png 2>/dev/null | head -1)}"
+if [[ -n "$PAIR" && -f "$PAIR" ]]; then
+  NAME="$(basename "$PAIR")"
+  cp "$PAIR" "$CLEAN/reference.png"
+  cp "$ROOT/dataset/search/$NAME" "$CLEAN/search.png"
+  echo "==> CLI end to end on $NAME"
+  (cd "$CLEAN" && uv run python -m src.localize search.png reference.png --json |
+    grep -E '"(x|y|confidence|low_confidence_flag|mode_used)"')
+else
+  echo "==> CLI skipped: no dataset/ locally to borrow a pair from"
+fi
+
+echo
+echo "Clean-room check passed for $REF"
