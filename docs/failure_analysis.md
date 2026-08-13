@@ -3,92 +3,159 @@
 Where the system fails, why, and which failures are defects versus correct
 readings of a genuinely underdetermined problem.
 
-All numbers come from `results/uniqueness_on.csv` over 108 stratified pairs
-(2 architectures x 2 anchor states x 3 pose conditions x 9 seeds), 1 px success
-tolerance. Reproduction command in section 6.
+All numbers come from `results/full_324.csv` and `results/baseline_324.csv`
+over **324 stratified pairs** (2 architectures x 2 anchor states x 3 pose
+conditions x 3 noise strata x 9 seeds), 1 px success tolerance. Reproduction
+commands in section 8.
 
-**Every figure on this page is measured on physics-free renders.** R2's
-`apply_sem_chain` is still an identity passthrough, so the noise stratum is a
-label on clean images. Nothing here should be read as performance under SEM
-noise; it is an upper bound that the physics chain will move.
+**These renders carry real SEM physics.** R2's `apply_sem_chain` is no longer an
+identity passthrough — the noise strata modify Poisson shot noise and read
+noise, with geometry-affecting parameters held constant across strata. Earlier
+revisions of this document were measured on physics-free renders at 108 pairs;
+**none of those figures appear here, and none should be quoted alongside these.**
 
 ---
 
 ## Headline
 
-| stratum | n | success@1px | median error (px) | mean PSR |
+| stratum | n | plain NCC | full pipeline | median error (px) |
 |---|---|---|---|---|
-| **overall** | 108 | **0.417** | 115.4 | 2.46 |
-| anchored | 54 | **0.833** | **0.028** | 2.76 |
-| unanchored | 54 | **0.000** | 455.3 | 2.17 |
+| **overall** | 324 | 0.377 | **0.426** | 111.7 |
+| anchored | 162 | 0.753 | **0.852** | **0.042** |
+| unanchored | 162 | 0.000 | **0.000** | 442.6 |
 
 The overall figure is the less informative of the two. It averages a stratum the
-system solves to a hundredth of a pixel with one that is not solvable at all.
+system solves to four hundredths of a pixel with one that is not solvable at all.
+
+Median end-to-end latency is **206 ms**.
 
 ---
 
 ## 1. The unanchored stratum is a ceiling, not a defect
 
-Fifty-four of the 108 cases score zero, and no amount of tuning moves them.
+162 of the 324 cases score zero, and no amount of tuning moves them.
 
-An unanchored reference is a window onto a purely periodic region — a word-line
-array with no aperiodic feature in frame. Correlating a periodic template
-against a periodic field produces a *lattice* of near-identical peaks rather
-than one peak. On a bare lattice, 903 candidate positions score exactly the
-maximum. The correlation evidence does not identify a position, because there
-is no information in the images that distinguishes those placements.
+An unanchored reference is a window onto a purely periodic region — an array
+with no aperiodic feature in frame. Correlating a periodic template against a
+periodic field produces a *lattice* of near-identical peaks rather than one
+peak. The correlation evidence does not identify a position, because there is no
+information in the images that distinguishes those placements.
 
 This is confirmed by construction rather than inferred: R1's generator asserts
-that an unanchored layout carries an empty anchor list. The stratum is built to
-contain no distinguishing feature.
+that an unanchored layout carries an empty anchor list, and raises if an
+anchored case has no anchor in its reference. The stratum is built to contain no
+distinguishing feature.
 
 **The ceiling on this dataset is therefore 0.500.** Measured against that
-ceiling, the system is at 0.833 of what is achievable.
+ceiling, the system is at **0.852 of what is achievable**.
 
 The correct response to an unsolvable case is to answer and flag, not to
 succeed. Every unanchored case escalates to the ambiguous tier, returns the
 centre-prior answer mandated by the problem statement, and carries a low
-confidence. None returns a confident wrong answer. That is designed behaviour.
+confidence. None returns a confident wrong answer. That is designed behaviour,
+and the recall data in section 6 shows it is not a near miss: the true peak is
+absent from the top 30 candidates in 160 of 162 unanchored cases.
 
 ---
 
-## 2. Uniqueness weighting: what it fixed and what it could not
+## 2. Why FinFET is harder: two periodicities, not "fine features"
 
-Stage 4a weights the matched filter toward reference regions that identify a
-position uniquely, measured by the peak-to-sidelobe ratio of each tile's own
-autocorrelation.
+The intuitive explanation — FinFET fails because its features are fine — is
+wrong, and a judge can falsify it. At `SEARCH_PX_NM = 10.0` the Nyquist period
+is 20 nm, or 2 px. The finest generated feature, a 72 nm fin pitch, samples at
+7.2 px. **Nothing aliases.** What happens is MTF attenuation from the PSF.
 
-| | before | after |
-|---|---|---|
-| overall | 0.389 | **0.417** |
-| anchored | 0.778 | **0.833** |
-| unanchored | 0.000 | 0.000 |
+Recomputing `exp(-2 pi^2 sigma^2 / Lambda^2)` at `psf.sigma_nm = 12.0`:
 
-The gain lands entirely on the anchored stratum, which is exactly the
-prediction: weighting can only concentrate the filter on distinguishing
-features that are *present*. Where no anchor is in frame the map correctly
-returns near-flat, masked correlation degrades to unmasked, and nothing changes.
+| feature | period | px/period | PSF MTF | area-avg | total |
+|---|---|---|---|---|---|
+| FinFET fin | 72 nm | 7.2 | 0.578 | 0.969 | **0.560** |
+| FinFET fin | 108 nm | 10.8 | 0.784 | 0.986 | **0.773** |
+| DRAM pitch | 144 nm | 14.4 | 0.872 | 0.992 | 0.865 |
+| DRAM pitch | 216 nm | 21.6 | 0.941 | 0.996 | 0.938 |
+| FinFET gate | 336 nm | 33.6 | 0.975 | 0.999 | **0.974** |
+| FinFET gate | 504 nm | 50.4 | 0.989 | 0.999 | **0.988** |
 
-That degradation is deliberate. The map is absolute-scale and is **not**
-renormalised per image. Rescaling so the best tile reads 1.0 would, on a
-reference with no anchor, promote whichever tile is marginally least periodic
-by chance into a false anchor — manufacturing a confident wrong answer out of
-noise. Returning a flat map keeps the failure visible.
+The area-average column is `sinc(10 / Lambda)` and contributes at most 3%
+anywhere. **It is overwhelmingly the PSF.**
+
+The real mechanism is that FinFET carries *two* periodicities at once: fins
+retaining 56–77% contrast superimposed on gates retaining 97–99%. A strongly
+attenuated fine lattice sitting on a nearly intact coarse one flattens the
+correlation surface in a way that a single periodicity does not. DRAM has one
+periodicity, at 87–94%.
+
+Two caveats to state whenever this table is shown:
+
+- It is **single-axis 1-D MTF**, and it describes contrast *amplitude*
+  retention. It is not an accuracy prediction.
+- **Pitch is a range, not a nominal.** `PITCH_TOLERANCE = 0.20` randomises it:
+  FinFET 72–108 nm, DRAM 144–216 nm. No generated pair sits at 90 or 180.
+
+The measured architecture split is consistent but less dramatic than the MTF
+gap suggests: DRAM 0.444 against FinFET 0.407. Note the inversion in median
+error — FinFET 38.6 px against DRAM 122.5 px. FinFET fails *less badly* when it
+fails, because its intact gate lattice still constrains the answer to a coarse
+grid.
 
 ---
 
-## 3. PSR does not separate correct from incorrect
+## 3. What disambiguation actually buys
+
+The plain-NCC baseline in `src/baseline_ncc.py` is the incumbent to beat. The
+overall gap is +0.049. **That number overstates the contribution of
+disambiguation and should not be quoted as it.**
+
+| stratum | plain NCC | full pipeline | delta |
+|---|---|---|---|
+| ALL | 0.377 | 0.426 | +0.049 |
+| **pose = none** | 0.463 | 0.481 | **+0.019** |
+| pose = small | 0.398 | 0.463 | +0.065 |
+| pose = large | 0.269 | 0.333 | +0.065 |
+
+The baseline is handed nominal pose (θ = 0, s = 10). That is *correct* on the
+`pose-none` stratum and wrong on the other two, so most of the aggregate gap is
+the baseline's absence of pose estimation rather than anything disambiguation
+does. On the stratum where the baseline's pose is right, disambiguation is worth
+**+0.019**. That is the honest figure, and the per-stratum breakdown is what
+separates the two claims.
+
+### Stage ablation
+
+Cite this on the **anchored stratum** (n=162). Averaging in the 162 unanchored
+cases, which are pinned at 0.000 by construction, halves every effect and makes
+weighting look inert when it is not.
+
+| stage | success@1px | median error (px) | ms |
+|---|---|---|---|
+| `ncc` | 0.753 | 0.454 | 32 |
+| `+ weighting` | 0.833 | 0.456 | 159 |
+| `+ selection` | 0.833 | 0.456 | 162 |
+| `+ sub-pixel` (full) | **0.852** | **0.042** | 207 |
+
+**Weighting is the entire disambiguation gain, +0.080.** Selection buys exactly
+0.000: with `TIE_SIGMA = 0.0` the tolerance is always zero, `n_tied` is always
+1, and `select_candidate` returns `peaks[0]` unchanged. The tie-break is
+mandated and fires correctly when ties exist; on this dataset exact ties never
+occur. Sub-pixel buys +0.019 and an 11x error reduction — 0.454 px is the
+integer-peak quantisation floor.
+
+> On the overall stratum the same ablation reads `ncc` 0.377 → `selected` 0.417
+> → `weighted` 0.417, which invites the conclusion that weighting contributes
+> nothing. That is an artefact of averaging over an unsolvable half, not a
+> result.
+
+---
+
+## 4. PSR does not separate correct from incorrect
 
 The peak-to-sidelobe ratio is the detection statistic gating escalation. It
-currently carries little discriminative signal:
+carries little discriminative signal:
 
-| stratum | mean PSR |
-|---|---|
-| anchored (83% correct) | 2.76 |
-| unanchored (0% correct) | 2.17 |
-
-The distributions overlap heavily. In earlier per-case measurement the highest
-PSR in the set belonged to a *wrong* answer.
+| architecture | mean PSR | median PSR | success@1px |
+|---|---|---|---|
+| DRAM | 2.519 | 2.599 | 0.444 |
+| FinFET | 2.132 | 1.815 | 0.407 |
 
 The cause is structural rather than a coding error. PSR compares the winning
 peak against the surrounding surface, but on a periodic layout the sidelobe
@@ -97,71 +164,175 @@ statistic normalises against is itself signal, which inflates the sidelobe
 standard deviation and compresses PSR toward the same value regardless of
 correctness.
 
-**Consequence:** with accept thresholds at 8.0 (fast) and 4.0 (robust) and
-observed PSR never exceeding about 3.4, no case is ever accepted early. Every
-pair escalates to the ambiguous tier. Slow, but never falsely confident — and
-the thresholds are deliberately left untuned, because lowering them to buy
-speed would buy it by making wrong answers confident.
+**Consequence:** with accept thresholds at 8.0 (fast) and 4.0 (robust),
+**320 of 324 cases escalate** to the ambiguous tier — 3 accept at `robust`, 1 at
+`fast`. Slow, but almost never falsely confident. The thresholds are
+deliberately untuned: lowering them to buy speed would buy it by making wrong
+answers confident.
 
-One measurement bug was found and fixed in this pass: sidelobe statistics
+> **Do not state that PSR is capped near 3.4.** That figure comes from the
+> superseded 108 set. On 324 the observed maximum is **12.314**, with 2 cases
+> at or above 8.0 and 4 at or above 4.0. The "everything escalates" conclusion
+> survives at 98.8%, but the 3.4 ceiling is falsifiable by opening the CSV.
+
+One measurement bug was found and fixed in an earlier pass: sidelobe statistics
 excluded a **Euclidean disc** around the peak while peak extraction suppresses
 over a **Chebyshev square**. The two regions disagree at the corners, so part of
 the peak's own shoulder was counted as background, biasing PSR low. Now matched.
 
 ---
 
-## 4. Secondary failure modes
+## 5. Confidence is uncalibrated, and the plot will be flat
 
-**Architecture.** DRAM 0.463 vs FinFET 0.370. FinFET layouts carry finer, more
-regular structure, which survives the 10x decimation less well and leaves fewer
-distinguishing features in the template.
+R4's calibrator is at chance on this data. Mean confidence, split by whether the
+answer was actually correct:
 
-**Pose.** Unrotated 0.500, small rotation 0.389, large rotation 0.361.
-Degradation with pose is expected: rotation is estimated before template
-construction, and residual angular error compounds through correlation. Note
-that R2's pose estimator still returns nominal pose with zero quality, so
-rotated pairs are currently matched at nominal — this number will move when
-pose estimation lands.
+| architecture | correct | wrong | separation |
+|---|---|---|---|
+| DRAM | 0.0624 (n=72) | 0.0604 (n=90) | **+0.0021** |
+| FinFET | 0.0632 (n=66) | 0.0548 (n=96) | **+0.0084** |
 
-**PSF estimation declines on periodic layouts.** The estimator fits a Gaussian
-rolloff to the radial power spectrum and gates on fit quality. On a
-lattice-dominated spectrum it correctly refuses and returns the documented
-default. Correct behaviour, but it means the PSF is effectively never measured
-on this data.
+322 of 324 cases carry `low_confidence_flag = 1`. The pathology is visible in a
+single row: case `dram_anchored_pose-none_0000` lands at `err_px` 0.0136 — a
+correct sub-pixel answer — with confidence 0.0709.
 
-**Ties never fire.** Tie rate is 0.000 and the tied-set size is always 1, both
-consequences of TIE_SIGMA = 0.0. That value is correct — at the previous 1.0 a
-sigma width was being passed as a raw score tolerance, tying all 30 candidates
-on 102 of 105 cases and handing the answer to the centre prior blind. Fixing it
-recovered accuracy by close to an order of magnitude. The side effect is that
-the tie-break flag
-carries no information as a confidence feature.
+**Caption the calibration plot honestly rather than hiding it.** A flat
+reliability curve is the correct depiction of a calibrator that has no
+discriminative feature to work with, and the reason it has none is section 4:
+PSR is the dominant input and PSR does not separate.
 
-**Latency.** Median 351 ms with uniqueness weighting against 105 ms without.
-The map depends only on the reference and is currently recomputed per case; it
-should be cached alongside the template.
+Two features are dead outright and should be described as such:
 
----
+- `n_tied` is **1** in all 324 cases.
+- `tie_break_used` is **False** in all 324 cases.
 
-## 5. What would move the numbers
-
-In order of expected value:
-
-1. **Anchors in the unanchored stratum.** The 0.500 ceiling is a property of the
-   dataset, not the algorithm. Nothing else can lift overall accuracy past it.
-2. **A PSR variant robust to periodic backgrounds** — estimating sidelobe
-   statistics from the aperiodic residual rather than the raw surface — would
-   make early acceptance possible and cut latency substantially.
-3. **R2's physics chain.** Every number here is measured on unrealistically
-   clean data and must be re-measured once noise, PSF, and edge brightening land.
-4. **Caching the uniqueness map** per reference.
+Both follow from `TIE_SIGMA = 0.0`, which is the correct value — at the previous
+1.0 a sigma width was being passed as a raw score tolerance, tying nearly all
+candidates and handing the answer to the centre prior blind. The fix recovered
+accuracy by close to an order of magnitude. The side effect is that neither
+field carries information as a confidence feature.
 
 ---
 
-## 6. How to reproduce
+## 6. Recall@K: the candidate list is not the bottleneck
 
-Run: `uv run python -m src.evaluate --data dataset_full --out results/uniqueness_on.csv`
+Was truth in the candidate list at all, before disambiguation ran?
+(weighted, NMS radius 8.)
 
-Per-case rows, including psr, n_tied, tie_break_used, uniqueness_score and the
-failure mode, are in the CSV. Dataset integrity is verifiable against
-`dataset_full/dataset_manifest.json`.
+| stratum | n | r@1 | r@5 | r@10 | r@30 |
+|---|---|---|---|---|---|
+| anchored | 162 | 0.833 | 0.840 | 0.846 | **0.852** |
+| unanchored | 162 | 0.000 | 0.000 | 0.000 | 0.012 |
+
+> **Reporting hazard.** `rank = -1` means the true peak never entered the top
+> 30. Those rows are misses. Filtering them out of the denominator — easy to do
+> by accident when hand-rolling analysis from the CSV — yields a spurious
+> `r@30 = 1.000`, a 2.3x overstatement. `src/recall.py` divides by the full case
+> count and is correct; the hazard is in downstream re-analysis.
+
+Two conclusions:
+
+1. **Going from K=1 to K=30 buys +0.019 on anchored.** When the true peak is
+   findable at all, it is essentially always rank 1. Deepening the candidate
+   list is not where accuracy is hiding, and `--max-k 30` is generous already.
+2. **Recall@30 on anchored (0.852) equals end-to-end accuracy on anchored
+   (0.852).** Disambiguation is losing nothing that peak extraction found. The
+   remaining 24 anchored failures are cases where the true peak was never a
+   candidate — a Stage 1/3 problem, not a Stage 4 problem.
+
+### NMS radius does not bite
+
+`DEFAULT_NMS_RADIUS_PX = 8` sits inside the FinFET fin pitch range of 7.2–10.8
+search px, which predicts that NMS could suppress genuine adjacent lattice
+peaks on roughly 22% of FinFET pairs. **Measured, it does not:**
+
+| comparison | cases differing in rank |
+|---|---|
+| radius 8 vs 2 | 0 / 324 |
+| radius 8 vs 4 | 0 / 324 |
+| radius 8 vs 16 | 1 / 324 |
+
+Radii 2 through 8 are bit-identical. The parameter is plumbed through — 16 moves
+one case — it simply has almost no effect, consistent with
+`DEFAULT_NMS_RADIUS_PX` being a documented fallback superseded at runtime by a
+radius derived from Stage 1's spectral pitch estimate. The predicted PSR
+inflation is also absent: FinFET PSR is *lower* than DRAM, the opposite of what
+suppression would produce.
+
+This tests that the constant does not bite. It does **not** test that the
+runtime override is correct; that is a separate, unmeasured claim.
+
+`PSR_EXCLUSION_RADIUS_PX` and `DEFAULT_NMS_RADIUS_PX` are nonetheless both 8 by
+coincidence and are set by different physics — correlation main-lobe width
+versus lattice pitch. They must not be recoupled now that R1 randomises pitch.
+
+---
+
+## 7. Secondary observations
+
+**Pose is the live failure axis.** none 0.481 → small 0.463 → large 0.333. That
+is the degradation curve, and it is monotone.
+
+**Noise does not matter, and this is now measured rather than inferred.** The
+strata comparison is weak evidence on its own — high 0.444, low 0.417, medium
+0.417, with "high" nominally *best*, a spread of about three cases. The
+noise-free control settles it properly.
+
+`dataset_control` is generated with `--noise-levels none --seeds-per-cell 27`,
+which yields 324 pairs sharing **every** geometry field with the shipped set
+pair-for-pair: `ground_truth`, `layout_params`, `crop_centre_nm`,
+`search_centre_nm`, `anchors_gt`, `anchors_in_reference` and `seed` are
+identical across all 324. Only `strata.noise_level` and
+`physics_params.noise_level` differ. That permits a per-pair difference — *this
+exact scene, clean versus noisy* — rather than an aggregate over different
+scenes.
+
+| | count |
+|---|---|
+| correct in both | 133 |
+| correct only without noise | 1 |
+| correct only with noise | 5 |
+| wrong in both | 185 |
+
+**318 of 324 pairs return the identical verdict.** Six are discordant, and they
+lean the wrong way — removing noise costs 4 net cases (anchored 0.827 clean
+against 0.852 noisy), which is not a causal effect but coin-flip variation among
+cases sitting on the 1 px threshold.
+
+The correct claim is therefore: **at these strata, noise is not a driver of
+failure.** The unstated part, which must accompany it, is that this bounds the
+strata R1 generated, not SEM noise in general — if the strata are mild, this
+result says the pipeline is insensitive to mild noise and nothing more.
+
+**Sub-pixel refinement** resolves 290 of 324 cases by phase cross-correlation
+and falls back to surface upsampling on 34.
+
+**No case reports a failure mode.** `failure_mode` is `none` in all 324 rows;
+every failure here is a wrong answer delivered normally, not a crash or a
+detected breakdown.
+
+---
+
+## 8. How to reproduce
+
+```bash
+uv run python -m src.evaluate     --data dataset --gt dataset/ground_truth.jsonl --out results/full_324.csv
+uv run python -m src.baseline_ncc --data dataset --gt dataset/ground_truth.jsonl --out results/baseline_324.csv
+uv run python -m src.ablate       --data dataset --gt dataset/ground_truth.jsonl --out results/ablation_324.csv
+uv run python -m src.recall       --data dataset --gt dataset/ground_truth.jsonl --out results/recall_324.csv --max-k 30
+```
+
+Pass `--gt` explicitly. A silently wrong ground-truth path poisons every number
+in this document.
+
+Per-case rows — including `psr`, `n_tied`, `tie_break_used`, `uniqueness_score`,
+`confidence` and `failure_mode` — are in the CSVs, which are tracked as evidence.
+Dataset integrity is verifiable against `dataset/dataset_manifest.json`.
+
+Generation is byte-reproducible across platforms, verified 2026-08-12 against
+pre-registered hashes on Windows and Mac, so the dataset can be regenerated from
+seed rather than transferred:
+
+```bash
+uv run python -m src.generate_dataset --output-dir dataset --seed 20260807
+```

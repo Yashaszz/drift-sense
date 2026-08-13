@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "pair_count": 108,
+  "expected_pair_count": 108,
+  "image_count": 216,
+  "image_tree_sha256": "2794040b107ec03c3279e74ecad2b12459d0ee3f015769ab4da091e2ae86e0c3",
+  "file_tree_sha256": "6e95d1af23a53308b9ebf1d2ea689064888bb9ab0a8376f22b6a119135f0e605",
+  "generator_commit": "0ae1bd1",
+  "generation": {
+    "seeds_per_cell": 9,
+    "seed": 20260807,
+    "out_size": 1000,
+    "supersample": 4,
+    "extent_nm": 12000.0,
+    "noise_levels": [
+      "none"
+    ]
+  },
+  "strata_counts": {
+    "architecture": {
+      "dram": 54,
+      "finfet": 54
+    },
+    "anchor": {
+      "anchored": 54,
+      "unanchored": 54
+    },
+    "noise_level": {
+      "none": 108
+    },
+    "pose_condition": {
+      "none": 36,
+      "small": 36,
+      "large": 36
+    }
+  },
+  "anchored_references_with_anchor": 54,
+  "layout_ranges_nm": {
+    "dram": {
+      "pitch_nm": [
+        144.0,
+        216.0
+      ],
+      "line_width_nm": [
+        34.0,
+        46.0
+      ],
+      "via_nm": [
+        51.0,
+        69.0
+      ]
+    },
+    "finfet": {
+      "fin_pitch_nm": [
+        72.0,
+        108.0
+      ],
+      "fin_width_nm": [
+        20.4,
+        27.599999999999998
+      ],
+      "gate_width_nm": [
+        11.049999999999999,
+        14.95
+      ],
+      "gate_pitch_nm": [
+        336.0,
+        504.0
+      ]
+    }
+  },
+  "pose_ranges": {
+    "none": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
+    "small": [
+      [
+        -5.0,
+        5.0
+      ],
+      [
+        0.97,
+        1.03
+      ]
+    ],
+    "large": [
+      [
+        -8.0,
+        8.0
+      ],
+      [
+        0.95,
+        1.05
+      ]
+    ]
+  }
+}

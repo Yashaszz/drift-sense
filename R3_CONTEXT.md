@@ -3,7 +3,7 @@
 **Purpose:** persistent context for R3 (Disambiguation & Evidence). Upload to
 project knowledge so code state does not have to be re-pasted each session.
 
-**Last synced:** 2026-08-11, after PR #13 merged to `main`.
+**Last synced:** 2026-08-12, after the 324-pair sweep and the PR #14 rebase.
 **Repo:** `~/Developer/drift-sense` · **Teammates:** R1 geometry/dataset, R2 physics/pose, R4 matcher/delivery
 
 ---
@@ -22,29 +22,36 @@ project knowledge so code state does not have to be re-pasted each session.
 | T8 uniqueness-weighted correlation | R4 | done, live |
 | T9 profiling and caching | R4 | done |
 | T7 confidence calibrator | R4 | done, at chance pending R2/R3 features |
-| `apply_sem_chain` | R2 | **still identity passthrough** |
+| `apply_sem_chain` | R2 | **live** — real Poisson shot + read noise per stratum |
 | `estimate_pose` | R2 | still returns nominal pose, zero quality |
 
 ---
 
 ## 2. Headline results
 
-108 stratified pairs, 1 px tolerance, **no-noise renders**
-(`uv run python -m src.evaluate --data dataset_full --out results/uniqueness_on.csv`):
+324 stratified pairs, 1 px tolerance, **real SEM noise strata**
+(`uv run python -m src.evaluate --data dataset --gt dataset/ground_truth.jsonl --out results/full_324.csv`):
 
-| stratum | n | before 4a | after 4a | median err |
+| stratum | n | plain NCC | full pipeline | median err |
 |---|---|---|---|---|
-| overall | 108 | 0.389 | **0.417** | 115.4 px |
-| anchored | 54 | 0.778 | **0.833** | **0.028 px** |
-| unanchored | 54 | 0.000 | 0.000 | 455.3 px |
+| overall | 324 | 0.377 | **0.426** | 111.7 px |
+| anchored | 162 | 0.753 | **0.852** | **0.042 px** |
+| unanchored | 162 | 0.000 | 0.000 | 442.6 px |
 
 Ceiling on this dataset is **0.500** — R1's generator asserts an unanchored
-layout carries an empty anchor list, so 54 cases are information-theoretically
-unsolvable. Quote anchored 0.833, not overall 0.417, and always label as
-no-noise.
+layout carries an empty anchor list, so 162 cases are information-theoretically
+unsolvable. Quote anchored 0.852, not overall 0.426, and always label the
+dataset.
 
-Latency: median 351 ms with weighting vs 105 ms without. Map depends only on
-the reference and is recomputed per case — caching is open, R4's call.
+**Never put 0.852 and the old 0.833 in one sentence.** They are different
+datasets (324 with noise vs 108 without), not an improvement.
+
+Latency: median 206 ms end to end on the 324 set.
+
+**The +0.049 overall gap against plain NCC is not what disambiguation buys.**
+The baseline is handed nominal pose (θ=0, s=10), which is correct only on the
+`pose-none` stratum. There the gap is **+0.019** — that is the disambiguation
+figure. The rest is the absence of pose estimation in the baseline.
 
 ---
 
@@ -63,7 +70,9 @@ unchanged.
 - **Hann taper:** FFT autocorrelation is circular; without the taper, wraparound
   manufactures periodicity in aperiodic tiles.
 - **Exclusion:** Chebyshev, radius `3σ`. Must stay well below the smallest layout
-  pitch in reference px (≥40 px at 1 nm/px). If it exceeded pitch, periodic
+  pitch in reference px (**≥72 px** at 1 nm/px — FinFET fin at −20% of its
+  90 nm nominal, since `PITCH_TOLERANCE = 0.20` randomises pitch over
+  72–108 nm). If it exceeded pitch, periodic
   sidelobes would be excluded and periodic tiles would score as unique.
 - **Absolute scale, never per-image normalised.** Rescaling so the best tile
   reads 1.0 would promote the least-periodic tile into a false anchor on an
@@ -123,11 +132,16 @@ versus lattice pitch. They must not be recoupled when R1 randomises pitch.
   confidence features.
 - **PSR does not separate correct from incorrect on periodic layouts.** The
   sidelobe region contains genuine lattice peaks, not noise, so the background
-  the statistic normalises against is itself signal. Anchored mean 2.76 vs
-  unanchored 2.17; earlier per-case data had the highest PSR on a *wrong*
-  answer. With thresholds at 8.0/4.0 and observed PSR capped near 3.4, every
-  case escalates. Thresholds are deliberately untuned — lowering them buys speed
+  the statistic normalises against is itself signal. DRAM mean 2.52 vs FinFET
+  2.13; earlier per-case data had the highest PSR on a *wrong* answer. With
+  thresholds at 8.0/4.0, **320 of 324 cases escalate** — 3 accept at `robust`,
+  1 at `fast`. Thresholds are deliberately untuned — lowering them buys speed
   by making wrong answers confident.
+
+  **PSR is not capped near 3.4.** That figure is from the 108 set and is wrong
+  on 324: the observed maximum is **12.314**, with 2 cases ≥ 8.0 and 4 ≥ 4.0.
+  The "everything escalates" conclusion survives at 98.8%, but quoting 3.4 as
+  the ceiling is falsifiable by opening the CSV.
 - **`sidelobe_stats` used a Euclidean disc while NMS uses a Chebyshev square.**
   The regions disagree at the corners, so part of the peak's shoulder counted as
   background and PSR was biased low. Fixed in PR #13; PSR values shifted.
@@ -151,14 +165,26 @@ versus lattice pitch. They must not be recoupled when R1 randomises pitch.
 
 ## 7. What remains
 
-1. `docs/citations.md` — 30% augmentation-realism block. Gated on R2's physics
-   chain landing; cannot cite augmentation realism for an identity passthrough.
+**Done, on `r3-recall-baseline` (PR #14):** `src/baseline_ncc.py`, `src/recall.py`
+and `src/ablate.py` are complete, with 324-pair outputs tracked under `results/`.
+They were previously listed here as open. PR #14 is rebased onto `main`, CI
+green, blocked only on review approval.
+
+Still open:
+
+1. `docs/citations.md` — 30% augmentation-realism block. **Unblocked**: R2's
+   chain is real, so augmentation realism is now citable.
 2. Citation audit across all docs.
-3. Re-measure everything once `apply_sem_chain` is real. Every number in
-   `failure_analysis.md` is labelled no-noise and will move.
-4. Open for R4: cache the uniqueness map per reference (351 ms → ~105 ms);
-   re-fit the confidence calibrator now that `uniqueness_score` populates
-   (their counterfactual put CV AUC at 0.506 → 0.926).
+3. Confidence-vs-accuracy calibration plot (Phase 3). Expect it flat — see §5
+   of `failure_analysis.md`.
+4. Open for R4: cache the uniqueness map per reference; re-fit the confidence
+   calibrator now that `uniqueness_score` populates (their counterfactual put
+   CV AUC at 0.506 → 0.926).
+5. **Uniqueness weighting contributes nothing to final accuracy on 324.** The
+   ablation reads `selected` 0.417 and `weighted` 0.417 — identical to the digit
+   on both success and median error — while recall finds the peak in 8 more
+   cases weighted than unweighted. The gain exists at ranking and dies before
+   the final answer. Diagnose before the deck.
 
 ---
 
@@ -167,30 +193,81 @@ versus lattice pitch. They must not be recoupled when R1 randomises pitch.
 - `uv run` for everything; ruff pinned `v0.16.1`, `--no-fix`; pre-commit enforced.
   `W293` (whitespace on blank docstring lines) has broken commits repeatedly.
 - Branch naming `r3-<feature>`.
-- Dataset lives in `dataset_full/` (108 pairs, `ground_truth.jsonl`,
-  `dataset_manifest.json`). `dataset/` is gitignored and empty. R1's zip is the
-  single source — identical ground truth does not imply identical renders
-  across Mac and WSL.
+- Dataset lives in `dataset/` (324 pairs, real noise strata). `dataset_full/`
+  is the superseded 108 set — its manifest and ground truth stay tracked as
+  provenance, its images are gitignored. **Never quote a 108-set number.**
+- **Generation is byte-reproducible across platforms.** Verified 2026-08-12:
+  R1 pre-registered the holdout's `image_tree_sha256` *and* `file_tree_sha256`
+  before generation, and a Mac run reproduced both exactly against their
+  Windows values (`d51df27b…` / `dcdcb969…`). Regenerate from seed; zips are
+  no longer the single source.
 
 ---
 
-## 9. Phase status (as of Aug 11)
+## 9. Phase status (as of Aug 12, late)
 
-Phases 0, 1, 2 complete for R3. Phase 4's `failure_analysis.md` written early.
+Phases 0, 1, 2 complete for R3. Phase 3 build work complete and now *measured*
+on 324 pairs. Phase 4's `failure_analysis.md` rewritten on those numbers.
 
-**Open on R3's plate, not blocked:**
-1. **recall@K** — the Aug 11 gate reads "recall@K and top-1 measured separately".
-   Top-1 is measured; `evaluate.py` still prints `NOTE: top-1 only. recall@K needs
-   the pre-disambiguation candidate list — see recall_at_k_pass()`. recall@K is
-   R4's number but R3's harness has to produce it. Gate is not closed until it does.
-2. **`baseline_ncc.py`** — Phase 1 deliverable, never confirmed to exist. The
-   incumbent to beat. Phase 3's baseline-vs-ours table and Phase 5's results slide
-   both depend on it.
-3. **Ablations** (Phase 3, Aug 12–13) — what each stage actually buys. Stage 4a now
-   has a clean before/after (0.778 → 0.833 anchored) to build the rest on.
-4. **Confidence-vs-accuracy calibration plot** (Phase 3).
+The Phase 3 holdout gate is **closed**: `dataset_holdout` no longer depends on a
+transfer from R1. Generation is byte-reproducible across platforms, verified
+against pre-registered hashes, so it regenerates from seed in ~4.5 min.
 
-**Blocked on R2:** `docs/citations.md` compile + audit (R1/R2 write entries beside
-their own numbers). Re-measuring every figure once `apply_sem_chain` is real.
+**Done tonight, PR #14 (`r3-recall-baseline`), open against `main`:**
+1. **recall@K** — `src/recall.py`. Reuses `_StageCache` so pose, template and
+   PSF match `localize()`. Sweeps weighted on/off and `nms_radius` 2-16.
+   On 324: anchored weighted r@1 0.833, r@30 **0.852**. Top-1 accuracy on
+   anchored is also 0.852, so **top-1-given-recall is 1.000** — selection loses
+   nothing once truth is in the list, and the 24 remaining anchored failures
+   are cases where truth was never a candidate (Stage 1/3, not Stage 4).
+   K=1 → K=30 buys only +0.019, so candidate depth is not the bottleneck.
+   Recall is flat across every NMS radius tested — radii 2/4/8 are bit-identical
+   and 16 moves one case — so the suppression concern does not hold.
+   Aug 11 gate is closed.
+
+   **Reporting hazard:** `rank = -1` means truth never entered the top 30.
+   Those rows are misses. Dropping them from the denominator yields a spurious
+   r@30 = 1.000, a 2.3x overstatement. `src/recall.py` is correct; the hazard
+   is in downstream re-analysis of the CSV.
+2. **`baseline_ncc.py`** — exists. Single-scale ZNCC at nominal 10x, argmax,
+   no pose / weighting / disambiguation / sub-pixel. Anchored **0.753** at
+   0.454 px median, 98 ms.
+3. **Ablations** — `src/ablate.py`, anchored stratum (n=162), on 324:
+
+   | stage | acc | median err | ms |
+   |---|---|---|---|
+   | ncc | 0.753 | 0.454 | 32 |
+   | + weighting | 0.833 | 0.456 | 159 |
+   | + selection | 0.833 | 0.456 | 162 |
+   | + sub-pixel (full) | **0.852** | **0.042** | 207 |
+
+   Weighting is the entire disambiguation gain (+0.080). **Selection buys
+   exactly 0.000** — with `TIE_SIGMA = 0.0` the tolerance is always zero,
+   `n_tied` always 1, and `select_candidate` returns `peaks[0]` unchanged.
+   The tie-break is mandated and fires correctly when ties exist; on this
+   dataset exact ties never occur. Sub-pixel buys +0.019 and an 11x error
+   reduction; 0.454 px is the integer-peak quantisation floor.
+
+   **Caveat on the overall-stratum ablation.** Across all 324 (not just
+   anchored) `selected` and `weighted` both read 0.417 / 111.7 — weighting
+   appears to contribute nothing. It does contribute (+0.080 on anchored);
+   the unanchored half, pinned at 0.000 by construction, halves the visible
+   effect and the rounding hides the rest. **Always cite the anchored
+   stratum for the ablation.**
+
+Every row cross-checks against an independent code path.
+
+**Blocked on R4:** confidence-vs-accuracy calibration plot — needs the
+calibrator re-fit now that `uniqueness_score` populates (it was at chance
+when `uniqueness_score` was NaN). Also asked for `refine: bool = True` on
+`localize()` so the sub-pixel ablation row comes from the same harness as
+the other three instead of from `uniqueness_on.csv`.
+
+**Blocked on R2:** `docs/citations.md` compile + audit. Re-measuring every
+figure once `apply_sem_chain` is real.
+
+**Parked, not dropped:** `src/disambiguate.py`'s module docstring still says
+`uniqueness_map` returns uniform weights and `select_candidate` returns the
+strongest peak. Both stale since PR #13.
 
 **Hard date:** Aug 13 is feature freeze. Aug 15 deck + zip + clean-machine test.
