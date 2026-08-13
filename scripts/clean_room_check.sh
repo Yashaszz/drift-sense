@@ -41,7 +41,14 @@ tail -1 "$CLEAN/mypy.log"
 # The CLI is the deliverable, so it is exercised on images the clean tree has
 # never seen. The dataset is gitignored and absent by design; a grader supplies
 # their own pair, and so do we.
-PAIR="${PAIR:-$(ls "$ROOT"/dataset/reference/*.png 2>/dev/null | head -1)}"
+# A glob, not `ls | head -1`: head exits after one line, ls takes SIGPIPE, and
+# pipefail turns a successful lookup into a 141 that aborts the script.
+if [[ -z "${PAIR:-}" ]]; then
+  shopt -s nullglob
+  candidates=("$ROOT"/dataset/reference/*.png)
+  shopt -u nullglob
+  PAIR="${candidates[0]:-}"
+fi
 if [[ -n "$PAIR" && -f "$PAIR" ]]; then
   NAME="$(basename "$PAIR")"
   cp "$PAIR" "$CLEAN/reference.png"
