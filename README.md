@@ -47,24 +47,42 @@ on a real tool needs an answer plus an honest quality signal, not an exception.
 
 ## Results
 
-Measured on 108 stratified synthetic pairs at the 1 px (10 nm) tolerance.
+Measured on **324 stratified synthetic pairs** — 2 architectures x 2 anchor
+states x 3 pose conditions x 3 noise strata x 9 seeds — at the 1 px (10 nm)
+tolerance, with the SEM physics chain live: real Poisson shot noise and read
+noise, varied across three strata. Reproduce with
+`uv run python -m src.evaluate --data dataset --out results/full_324.csv`.
 
-| | |
-|---|---|
-| accuracy, **anchored** references | **77.8%** |
-| accuracy, unanchored references | 0.0% |
-| accuracy, all pairs | 38.9% |
-| latency, median / p95 | 105 ms / 146 ms |
-| sub-pixel accuracy on known shifts | 0.01 px |
+| | plain NCC | full pipeline |
+|---|---|---|
+| accuracy, **anchored** references (n=162) | 0.753 | **0.852** |
+| accuracy, unanchored references (n=162) | 0.000 | 0.000 |
+| accuracy, all pairs (n=324) | 0.377 | 0.426 |
+| median error, anchored | 0.454 px | **0.042 px** |
+| latency, median / p95 | | 206 ms / 225 ms |
+
+**Quote the anchored figure, and say which dataset it is on.** The all-pairs
+number averages a stratum the system solves to four hundredths of a pixel with
+one that is not solvable at all.
 
 The unanchored result is the honest one and not a defect. An unanchored
-reference is a periodic patch with no aperiodic feature in frame; on a bare
-lattice **903 distinct positions score exactly the maximum**, so the evidence
-does not identify a location. That is an information-theoretic limit, and the
-correct response is to answer and flag rather than to claim success.
+reference is a periodic patch with no aperiodic feature in frame, so the
+correlation evidence does not identify a location — the generator asserts that
+such a layout carries an empty anchor list, which puts the ceiling on this
+dataset at 0.500 and the system at 0.852 of what is achievable. The true peak
+is absent from the top 30 candidates in **160 of the 162** unanchored cases, so
+this is not a near miss. Every one of them escalates, returns the centre-prior
+answer and carries the low-confidence flag; **none returns a confident wrong
+answer**. That is an information-theoretic limit, and the correct response is
+to answer and flag rather than to claim success.
 
-These numbers are measured on geometry-only data — the SEM physics chain is not
-yet implemented — and will move once noise, blur and edge brightening land.
+`docs/failure_analysis.md` has the per-stratum breakdown, the stage ablation and
+the reproduction commands; `docs/citations.md` records which parts of the
+simulated physics are literature-backed and which are declared assumptions.
+
+> Earlier revisions of this file quoted 108-pair, physics-free numbers (77.8%
+> anchored, 105 ms). Those are a different dataset, not a worse version of
+> these — do not mix figures from the two.
 
 ## How it works
 
@@ -91,9 +109,10 @@ behind them, and `benchmarks/README.md` to reproduce every number.
 
 ```
 src/          pipeline modules; localize.py is the deliverable
-tests/        474 tests
+tests/        495 tests
 benchmarks/   reproducible timing, accuracy and calibration reports
-docs/         engineering notes and handoff
+results/      tracked CSV evidence behind every number in this file
+docs/         failure analysis, citations, engineering notes and handoff
 ```
 
 ## Development
