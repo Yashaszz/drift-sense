@@ -1,0 +1,210 @@
+# Assumptions — generator geometry and sampling
+
+Owner: R1. Every number the generator uses to place a shape or sample a pixel is
+listed here with where it lives, what it feeds, and what justifies it.
+
+The point is not to make the dataset look authoritative. It is that a judge
+reading `layouts.py` can ask "why 180 nm?" and get an answer that is either a
+citation, a derivation, or an honest "we chose this, here is the consequence if
+it is wrong". A number with none of those three is a defect.
+
+Physics parameters — edge brightening, PSF, shot and read noise, scan artifacts
+— are R2's and are documented beside their presets in `src/sem_physics.py`.
+This file covers geometry and sampling only.
+
+## How to read the Source column
+
+| Class | Meaning |
+|---|---|
+| **Spec** | Given in the problem statement. Not ours to justify, but ours to state. |
+| **Derived** | Follows from another number. The derivation is the justification; no citation applies. |
+| **Literature** | A real process dimension we chose to imitate. **Needs a citation.** |
+| **Engineering** | Our choice, defensible by consequence rather than by source. |
+
+Only the **Literature** rows need an external reference. Everything else needs a
+sentence, and most of those sentences are already in the code.
+
+---
+
+## 1. Imaging geometry — Spec
+
+| Constant | Value | Where | Feeds |
+|---|---|---|---|
+| `REF_PX_NM` | 1.0 nm/px | `config.py:33` | Reference sampling; the "100x" optic |
+| `SEARCH_PX_NM` | 10.0 nm/px | `config.py:36` | Search sampling; the "10x" optic |
+| `NOMINAL_SCALE` | 10.0 | `config.py:39` | Reference-to-search decimation ratio |
+| `EXPECTED_IMAGE_SHAPE` | (1000, 1000) | `config.py:46` | Both image sizes |
+| `OUT_SIZE` | 1000 px | `generate_dataset.py:98` | Rendered edge length |
+
+**Source:** stated in the problem specification. Cite the problem statement by
+section, not a paper.
+
+> **TODO:** quote the exact line from the problem statement that fixes the two
+> pixel sizes, so the claim is checkable rather than asserted.
+
+These are the reason the whole task is hard: a 1000 px reference at 1 nm/px sees
+1 µm, and the search image at 10 nm/px sees 10 µm, so the reference occupies
+0.69% of the search area.
+
+---
+
+## 2. Die region and framing — Derived / Engineering
+
+| Constant | Value | Where | Justification |
+|---|---|---|---|
+| `EXTENT_NM` | 12 000 nm | `generate_dataset.py:95` | **Derived.** Must exceed the 10 µm search field so a crop never runs off the layout. 12 µm gives 2 µm of margin. |
+| `ANCHOR_SPAN_FRACTION` | 0.34 | `generate_dataset.py:154` | **Derived.** Half-width of the anchor placement box as a fraction of the reference FOV. Expressed as a fraction rather than nanometres so it tracks `out_size`; a fixed nm value silently assumes a 1000 px reference and puts anchors outside the crop at any other size. |
+| `DEFAULT_ANCHOR_HALF_SPAN_NM` | 340.0 nm | `layouts.py:42` | **Derived.** `1000 px x 1 nm/px x 0.34`. The default exists so `layouts.py` is usable standalone; the generator always passes an explicit value. |
+| `DEFAULT_SUPERSAMPLE` | 4 | `render.py:53` | **Engineering.** Area-averaged 4x4 per output pixel. Consequence if wrong: too low aliases edges and biases the sub-pixel ground truth; higher costs render time with no measurable accuracy gain. |
+
+No citation applies to any of these. The derivation *is* the justification, and
+each is already stated in the code.
+
+---
+
+## 3. Domain randomisation — Engineering, sourced to the team spec
+
+| Constant | Value | Where | Justification |
+|---|---|---|---|
+| `PITCH_TOLERANCE` | ±20% | `generate_dataset.py:162` | Work-split document, Phase 2 |
+| `WIDTH_TOLERANCE` | ±15% | `generate_dataset.py:165` | Work-split document, Phase 2 |
+| `POSE_RANGES["small"]` | ±5°, ±3% | `generate_dataset.py:101` | Work-split document, Phase 2 baseline |
+| `POSE_RANGES["large"]` | ±8°, ±5% | `generate_dataset.py:101` | **Engineering.** Deliberately exceeds the spec so the dataset carries stress cases beyond the range anyone tunes against. |
+
+**Honest framing:** these are our own planning document, not literature. Say so.
+"We chose ±20% to exercise the matcher across process variation" is defensible.
+"±20% is the industry figure" is not, unless sourced.
+
+> **TODO (optional, upgrades the claim):** real process variation is specified
+> as 3σ CD tolerance in published process-control literature. If a figure is
+> found, state ours as "wider than typical 3σ CD variation, deliberately" and
+> cite it. If not, keep the honest version — do not imply a source that is not
+> there.
+
+---
+
+## 4. Layout dimensions — deliberately relaxed, not a node replica
+
+**These are the numbers a judge will ask about, and the honest answer is not a
+citation.** Our dimensions do not match any production node. They are roughly
+2–4x larger, and that is a deliberate consequence of the sampling the problem
+statement fixes. Claiming a node reference for them would be misattribution:
+the source would not support the number, and R3 audits citations against the
+code.
+
+### What we use
+
+| Architecture | Parameter | Nominal | Range in data |
+|---|---|---|---|
+| DRAM | `pitch_nm` | 180 nm | 144–216 |
+| DRAM | `line_width_nm` | 40 nm | 34–46 |
+| DRAM | `via_nm` | 60 nm | 51–69 |
+| FinFET | `fin_pitch_nm` | 90 nm | 72–108 |
+| FinFET | `fin_width_nm` | 24 nm | 20.4–27.6 |
+| FinFET | `gate_width_nm` | 13 nm | 11.05–14.95 |
+| FinFET | `gate_pitch_nm` | 420 nm | 336–504 |
+
+Defined at `generate_dataset.py:143` and `:146`; ranges follow from
+`PITCH_TOLERANCE` and `WIDTH_TOLERANCE` in section 3.
+
+### What real silicon uses
+
+| Process | Fin pitch | Gate pitch (CPP) | Source |
+|---|---|---|---|
+| Intel 14 nm | 42 nm | — | Bohr, *14 nm Process Technology*, IDF 2014 |
+| Intel 22FFL | 45 nm | ~108 nm | IEDM 2017, via WikiChip Fuse |
+| Intel 22 nm | ~60 nm | ~90 nm | Intel 22 nm SoC platform paper, IEDM 2012 |
+| DRAM (recent) | — | ~60–80 nm pitch (30–40 nm half-pitch) | industry reporting — **needs a primary source** |
+
+> **Verification status:** these figures come from search summaries of the
+> sources listed in `citations.md`, not from reading each primary document
+> end-to-end. Confirm each against the primary before submission. They are used
+> only as *contrast* to our values, so an error here weakens the framing but
+> does not corrupt the dataset.
+
+### Why we relaxed them — the actual justification
+
+The problem statement fixes the search capture at 10 nm/px. Combined with R2's
+search PSF (σ = 12 nm), a Gaussian MTF of `exp(-2π²σ²/Λ²)` gives the contrast
+surviving into the search image:
+
+| Feature | Period | px/period | Contrast retained |
+|---|---|---|---|
+| Intel 14 nm fin pitch | 42 nm | 4.2 | **20.0%** |
+| Intel 22FFL fin pitch | 45 nm | 4.5 | 24.6% |
+| Intel 22 nm fin pitch | 60 nm | 6.0 | 45.4% |
+| **Ours, FinFET fin (min)** | 72 nm | 7.2 | **57.8%** |
+| **Ours, FinFET fin (nom)** | 90 nm | 9.0 | 70.4% |
+| **Ours, FinFET fin (max)** | 108 nm | 10.8 | 78.4% |
+| Real DRAM pitch | ~70 nm | 7.0 | 56.0% |
+| **Ours, DRAM pitch (nom)** | 180 nm | 18.0 | 91.6% |
+
+At leading-edge dimensions the fin lattice reaches the search image at **20%
+contrast before any noise is added**. Under the `high` stratum — dose scaled to
+0.35 of R2's search preset — that signal is at or below the shot-noise floor,
+and the search capture carries essentially no fin information. The task would
+not be hard; it would be ill-posed, and every unanchored FinFET pair would fail
+for reasons that say nothing about the matcher.
+
+Relaxing to 72–108 nm keeps the periodic structure resolvable (58–78% contrast)
+while still sitting well below DRAM's 87–94%, so FinFET remains the harder
+architecture for the reason we claim rather than by accident.
+
+**The one-sentence version for the deck:** *dimensions are relaxed ~2x from
+leading-edge silicon so that periodic structure survives the 10 nm/px search
+optic the problem specifies; at true 14 nm-node fin pitch the fins reach the
+search image at 20% contrast and the task stops being well-posed.*
+
+Nyquist is not the binding constraint anywhere — it needs ≥2 px/period and even
+42 nm clears it at 4.2 — so nothing in the dataset aliases. Contrast, not
+sampling, is what separates the architectures.
+
+### Consequence if this choice is wrong
+
+If a judge considers the relaxation unrealistic, the affected claim is
+"architecture-agnostic across representative geometry", not the accuracy
+numbers: ground truth, the coordinate convention and the matcher are all
+independent of absolute feature size. The fix would be a second dataset at true
+node dimensions, which the generator supports today by changing two dicts.
+
+---
+
+## 5. Ground-truth convention — Spec / Derived
+
+| Constant | Value | Where | Justification |
+|---|---|---|---|
+| `ORIGIN_TOP_LEFT` | True | `config.py:60` | **Spec.** Image convention. |
+| `X_AXIS_IS_COLUMN` | True | `config.py:63` | **Spec.** |
+| `PIXEL_CENTRE_AT_INTEGER` | True | `config.py:66` | **Spec/Derived.** Pixel *i* centre is at coordinate *i*, so a 1000 px image has centre base 499.5, not 500. A published revision once used 500 and capped team accuracy at ~1 px. |
+| `OVERLAY_BIAS_TOLERANCE_PX` | 0.2 px | `generate_dataset.py:62` | **Derived from measurement.** Set from the measured noise floor: a known-good dataset lands within ~0.10 px of zero, a planted 0.5 px offset reads back as ~-0.46. 0.2 sits between them. |
+
+No literature applies. These are conventions plus one empirically calibrated
+threshold, and the calibration is recorded beside the constant.
+
+---
+
+## 6. Seeds and reproducibility — Engineering
+
+| Constant | Value | Where | Justification |
+|---|---|---|---|
+| `DEFAULT_SEED` | 20260807 | `generate_dataset.py:92` | Frozen base seed for the shipped set. Pair *i* uses `base_seed + i`. |
+| Held-out seed | 389722107 | not in code | Drawn with `secrets`, deliberately unpredictable and outside the tuning seed range, so no pair is shared with the shipped set. |
+
+Generation is reproducible from seed: an independent regeneration on macOS
+reproduced the held-out set's `image_tree_sha256` (`d51df27b…`) against a value
+published in advance from Windows. Pixel-level cross-platform reproducibility is
+therefore established by pre-registered prediction rather than by comparing a
+file against itself.
+
+> **TODO:** confirm byte-level (`file_tree_sha256`, `dcdcb969…`) and record the
+> outcome here. Pixel-level is established; byte-level is one comparison away.
+
+---
+
+## Open items
+
+- [ ] Quote the problem statement lines fixing `REF_PX_NM` and `SEARCH_PX_NM`
+- [ ] Source the seven DRAM/FinFET dimensions, or replace each with an explicit
+      engineering rationale
+- [ ] Optional: source a 3σ CD variation figure to upgrade the tolerance claim
+- [ ] Record the byte-level reproducibility result

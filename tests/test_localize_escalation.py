@@ -11,7 +11,9 @@ fixed that in commit b07667a; the tests remain because the failure was silent â€
 ``tie_break_used`` still reported True â€” and a regression would be too.
 """
 
+import inspect
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -248,3 +250,26 @@ def test_unanchored_pair_is_flagged(two_scale_pair):
     reference, search, _ = two_scale_pair
     result = localize(search, reference, mode="auto")
     assert isinstance(result.low_confidence_flag, bool)
+
+
+def test_psr_uses_its_own_exclusion_radius_not_the_nms_one():
+    """PSR must not move when the NMS radius changes.
+
+    ``config.py`` splits ``PSR_EXCLUSION_RADIUS_PX`` from
+    ``DEFAULT_NMS_RADIUS_PX`` -- correlation main-lobe width versus lattice
+    pitch -- and notes they must stop tracking each other once R1 randomises
+    pitch. Pitch is randomised now. ``localize`` was passing the NMS constant
+    into both PSR call sites, which re-coupled them where it mattered: any fix
+    to the NMS radius for FinFET's fin pitch would have silently shifted every
+    PSR value and every escalation decision with it.
+
+    The two constants are equal today, so this reads the source rather than the
+    behaviour -- a value comparison could not tell them apart.
+    """
+    source = Path(inspect.getfile(localize)).read_text(encoding="utf-8")
+
+    for call in ("sidelobe_stats", "peak_to_sidelobe"):
+        start = source.index(f"disambiguate.{call}(")
+        window = source[start : start + 400]
+        assert "PSR_EXCLUSION_RADIUS_PX" in window, f"{call} must use the PSR radius"
+        assert "DEFAULT_NMS_RADIUS_PX" not in window, f"{call} must not use the NMS radius"
