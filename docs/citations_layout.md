@@ -48,11 +48,25 @@ https://fuse.wikichip.org/news/567/iedm-2017-intel-details-22ffl-a-relaxed-14nm-
 - [ ] Confirm both figures
 - [ ] Prefer the IEDM paper itself if reachable; WikiChip is secondary
 
-**[3] Intel 22 nm SoC platform — tri-gate, fin dimensions**
-*A 22nm SoC Platform Technology Featuring 3-D Tri-Gate and High-k/Metal Gate*,
-IEDM 2012.
+**[3] Intel 22 nm SoC platform — CONFIRMED from the primary PDF**
+C.-H. Jan et al., *A 22nm SoC Platform Technology Featuring 3-D Tri-Gate and
+High-k/Metal Gate, Optimized for Ultra Low Power, High Performance and High
+Density SoC Applications*, IEDM 2012.
 https://people.eecs.berkeley.edu/~pister/147fa14/Resources/Intel22nm.pdf
-- [ ] Confirm fin pitch and gate pitch
+
+Figures extracted from the paper's own text and tables:
+
+| Parameter | Value | Quoted as |
+|---|---|---|
+| Gate pitch | **90 nm** | "on a 90nm pitch with a 30nm and 34nm gate length" |
+| Gate pitch, relaxed | **108 nm** | "increase the gate pitch from 90nm to 108nm" |
+| Fin pitch | **60 nm** | table row `Fin 60` |
+| M1 pitch | **90 nm** | table row `M1 90 SAV ULK CDO` |
+| Gate length | **30 / 34 / 40 nm** | table row `Lgate (nm) 30 34 34 40` |
+
+- [x] **Confirmed.** Prose figures are quoted directly; the fin, M1 and Lgate
+      values come from table rows, so re-read the table visually to be certain
+      of column alignment before the deck.
 
 **[4] 22 nm lithography process — consolidated node figures**
 WikiChip.
@@ -66,6 +80,27 @@ https://irds.ieee.org/images/files/pdf/2024/2024IRDS_MM.pdf
 - [ ] Locate the More Moore table and record the specific table number and year
       column used. **Note:** the PDF resisted automated text extraction; open it
       manually.
+
+**[5a] IRDS DRAM ground rules — CONFIRMED from the primary PDF**
+IEEE IRDS 2023, *More Moore*, §5.1 "DRAM", page 28.
+https://irds.ieee.org/images/files/pdf/2023/2023IRDS_MM.pdf
+
+> "…as the capacitor of DRAMs having the ground rules between **48nm and 30nm
+> half-pitch**."
+
+and page 29:
+
+> "lines still require **~20nm half-pitch** that is only achievable by 193i
+> lithography with double patterning."
+
+So current DRAM sits at **30–48 nm half-pitch**, i.e. a **60–96 nm pitch**.
+Ours is 144–216 nm pitch (72–108 nm half-pitch), roughly **2.3–3.6x relaxed**.
+Page 28 also defines the cell size factor `a = [DRAM cell size] / [DRAM half
+pitch]^2`, with 6F2 current and 4F2 the practical limit.
+
+- [x] **Confirmed** by text extraction from the PDF. This is the primary DRAM
+      source; the secondary items below are now redundant and kept only as
+      cross-checks.
 
 **[6] DRAM node definition — node = half the Metal 1 pitch**
 Tokyo Electron, *Telescope Magazine*, "What Exactly Does the 14 nm Dimension
