@@ -47,7 +47,10 @@ dataset.
 **Never put 0.852 and the old 0.833 in one sentence.** They are different
 datasets (324 with noise vs 108 without), not an improvement.
 
-Latency: median 206 ms end to end on the 324 set.
+Latency: median **212 ms**, p95 215 ms, on the 324 set — **on this Mac**
+(`results/full_324.meta.json`). R4's Windows laptop reports 356 ms on the same
+pairs with identical accuracy. Never quote a latency without its machine; the
+README's block is generated so it cannot be typed without one.
 
 **The +0.049 overall gap against plain NCC is not what disambiguation buys.**
 The baseline is handed nominal pose (θ=0, s=10), which is correct only on the
