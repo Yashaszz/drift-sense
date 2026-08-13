@@ -95,13 +95,18 @@ simulated physics are literature-backed and which are declared assumptions.
 
 Three results from the 324-pair run that are not visible in the table above.
 
-- **The physics chain did not cost accuracy.** Anchored accuracy is unchanged
-  from the geometry-only dataset. Across noise strata it is 83.3% / 83.3% /
-  88.9% for low / medium / high — high noise scored *highest*. ZNCC is
-  normalised, so the current noise magnitudes do not move it. Worth stating
-  deliberately rather than claiming noise robustness by accident.
-- **Pose is the dominant degradation axis.** 48.1% at `pose=none` against 33.3%
-  at `pose=large`. Rotation and scale estimation is not yet implemented, so
+- **The physics chain did not cost accuracy.** The comparison is against
+  `dataset_control`, a paired noise-free control sharing every scene and seed
+  with the shipped set: anchored **0.827 clean against 0.852 with noise**, so
+  the noisy set scores marginally *higher*. Across noise strata anchored
+  accuracy is 83.3% / 83.3% / 88.9% for low / medium / high — high noise scored
+  highest. ZNCC is normalised, so the current noise magnitudes do not move it.
+  Worth stating deliberately rather than claiming noise robustness by accident.
+  (The comparison is *not* against the superseded 108-pair geometry-only set;
+  those figures are not comparable, per the note above.)
+- **Pose is the dominant degradation axis.** On the anchored stratum, **0.963 at
+  `pose=none` against 0.667 at `pose=large`** — all-pairs, the same split reads
+  48.1% against 33.3%. Rotation and scale estimation is not yet implemented, so
   rotated pairs are matched at nominal pose.
 - **One stage dominates latency.** Scoring the reference's uniqueness map is
   **60.6% of the call**. That share is the portable number — it holds on either

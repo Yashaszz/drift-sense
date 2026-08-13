@@ -91,9 +91,10 @@ each is already stated in the code.
 ## 4. Layout dimensions — deliberately relaxed, not a node replica
 
 **These are the numbers a judge will ask about, and the honest answer is not a
-citation.** Our dimensions do not match any production node. They are roughly
-2–4x larger, and that is a deliberate consequence of the sampling the problem
-statement fixes. Claiming a node reference for them would be misattribution:
+citation.** Our dimensions do not match any production node. They are larger by
+**1.5x to 5x depending on which dimension you compare** — fin pitch is the
+tightest at 1.5x against Intel 22 nm, gate pitch the loosest at 4.7x — and that
+is a deliberate consequence of the sampling the problem statement fixes. Claiming a node reference for them would be misattribution:
 the source would not support the number, and R3 audits citations against the
 code.
 
@@ -165,7 +166,7 @@ that matters: our FinFET fins (58–78%) still sit below our DRAM (87–94%), so
 FinFET remains the harder architecture for the reason we claim rather than by
 accident.
 
-**The one-sentence version for the deck:** *dimensions are relaxed roughly 2–3x
+**The one-sentence version for the deck:** *dimensions are relaxed 1.5–5x
 from current silicon so periodic structure survives the 10 nm/px search optic
 the problem specifies; at real DRAM ground rules the lattice reaches the search
 image at 45% contrast and at leading-edge fin pitch at 20%, where the task stops

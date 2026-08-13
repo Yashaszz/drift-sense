@@ -46,8 +46,8 @@ Numbered sources are listed in §7.
 | Pitch randomisation | ±20% | **[A]** | From the work-split document, pinned by `tests/test_geometry.py:339`. |
 | Linewidth randomisation | ±15% | **[A]** | As above. |
 
-**The deviation, stated plainly.** These dimensions are roughly **2–5×
-relaxed** from real silicon, family by family:
+**The deviation, stated plainly.** These dimensions are relaxed from real
+silicon by **1.5× to 5×, depending on which dimension you compare**:
 
 | ours | nearest real reference | ratio |
 |---|---|---|
@@ -57,13 +57,23 @@ relaxed** from real silicon, family by family:
 | fin width 24 nm | 8 nm, Intel 22 nm [10] | 3.0× |
 | DRAM pitch 180 nm | sub-20 nm-class M1 half-pitch, i.e. sub-40 nm pitch [8, 9] | ~4–5× |
 
-This is deliberate and it is a *sampling* constraint, not a
-modelling claim: the search image is captured at 10 nm/px, so a 40 nm real
-word-line pitch spans 4 px and sits at the Nyquist limit of the image the
-matcher actually receives. The lattice would alias rather than correlate, and
-the benchmark would measure aliasing. At 180 nm the pitch spans 18 search
-pixels and the ambiguity being studied — *many identical lattice placements* —
-is present without being confounded by undersampling.
+This is deliberate, and the reason is **contrast, not sampling.** An earlier
+revision of this document argued that real pitches would alias at 10 nm/px.
+That was wrong, and `docs/assumptions.md` §4 is the correction: Nyquist needs
+≥2 px/period, and even a 42 nm pitch clears it at 4.2 px/period, so nothing in
+the dataset aliases.
+
+What actually binds is the modulation surviving R2's search PSF (σ = 12 nm).
+Through a Gaussian MTF, a 60 nm real pitch reaches the search image at **45%
+contrast before any noise is added**, and Intel's 42 nm fin pitch at **20%**,
+which under the `high` noise stratum is at or below the shot-noise floor. At
+those dimensions the task is not hard, it is **ill-posed** — every unanchored
+pair would fail for reasons that say nothing about the matcher. Our geometry
+lands at 58–94% contrast against 45–74% for every confirmed real dimension.
+
+The full derivation and the per-feature contrast table are in
+`docs/assumptions.md` §4, which is the authority for this argument; this
+section defers to it rather than restating it.
 
 The consequence for the results: **the periodic-ambiguity problem is modelled
 faithfully; the specific node is not.** Nothing in the pipeline is tuned to a

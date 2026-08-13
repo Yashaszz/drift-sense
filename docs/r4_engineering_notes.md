@@ -124,12 +124,18 @@ steps are deliberately **not** applied:
 the 3x the three-correlation form suggests, because three raw `TM_CCORR` passes
 beat one normalised `TM_CCOEFF_NORMED`.
 
-**Currently inert, and skipped rather than paid for.** While `uniqueness_map`
-returns a constant, the weighted surface is provably identical to the unweighted
-one. Running it anyway cost 2x for a surface differing by 8.94e-07 and took auto
-mode from 105 ms back to 263 ms. Weighting is therefore skipped when the map is
-constant — an equivalence, not an approximation — and re-engages automatically
-the moment the map varies.
+**No longer inert — this is now the stage that earns the most.** The paragraph
+here previously read "currently inert, and skipped rather than paid for",
+measured while `uniqueness_map` returned a constant. R3's map has been real
+since PR #13, so the skip no longer fires on normal input and weighting is paid
+for and worth it: **+0.080 accuracy on the anchored stratum** (0.753 → 0.833),
+the single largest contribution of any stage (`results/ablation_324.csv`).
+
+The constant-map skip remains as an equivalence, not an approximation, and
+still fires when a reference genuinely has no informative structure — which is
+the case it was written for. The 105 ms / 263 ms figures in the original note
+were from the superseded 108-pair set and are not comparable to current
+latency; see the README for the current figure and its machine.
 
 ---
 
