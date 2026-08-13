@@ -109,6 +109,23 @@ unchanged.
   unknown → escalate.
 - **Ownership** — R4 owns `confidence`, `low_confidence_flag` (`src/confidence.py`).
   R3 owns `psr`, `n_tied`, `uniqueness_score`, `tie_break_used`.
+- **`estimate_pose(reference, search, nominal_scale=10.0) -> PoseEstimate`** —
+  R2's seam, wired at `src/localize.py:752`. Three fields, all consumed:
+  - `theta_deg` — degrees, **positive counter-clockwise, same sign as the
+    ground truth's `rotation_deg`; do not negate.** Verified empirically on
+    three `pose-large` pairs on 2026-08-13: `+gt` gives ZNCC peak 0.99, `-gt`
+    gives 0.60 / 0.25 / 0.12 and 12.4 px of error at 6.5°. This was worth
+    checking because the generator rotates the sampling *window*
+    (`src/render.py:396`) while the matcher rotates the *image*
+    (`src/matcher.py:459`) — same stated convention, different objects, and
+    nothing had ever exercised the composition because the estimator is a stub
+    returning 0.0.
+  - `scale` — **total, not residual.** Nominal capture gives 10.0; observed
+    ground truth runs 9.50–10.23. Passed straight into `build_template`.
+  - `quality` — gates the whole estimate. **Below `_MIN_POSE_QUALITY = 0.2`
+    the estimate is discarded entirely** and nominal pose is used instead
+    (`src/localize.py:74`). An estimator that returns 0.0 quality, as the stub
+    does, is silently ignored no matter how good its angle is.
 - **Coordinates** — pixel-centre origin; reference 1 nm/px, search 10 nm/px
   (10× *linear*). Downsampling is area-averaging only.
 
@@ -218,6 +235,19 @@ green, blocked only on review approval.
    reached, twice, because `set -o pipefail` plus `| tail` returns 141 on
    SIGPIPE; both fixed, and worth remembering before trusting any
    green output from a bash pipeline.
+
+**Inbound, Aug 13:**
+
+- **R2 has committed a real `pose.py`** and asked for the integration contract
+  before wiring it. Answered from the code, not from memory — the seam,
+  the three fields, the sign convention (verified, see §4) and the
+  `quality >= 0.2` gate that would otherwise discard their estimator
+  silently. Pose is the dominant error axis: anchored 0.963 at `pose-none`
+  against 0.667 at `pose-large`, so this is the largest accuracy gain left.
+- **R1 is regenerating `ground_truth.jsonl`** after the `physics_params` fix in
+  PR #24. Expect a large text diff on that file with **no image changes** —
+  generation is deterministic, so the pairs are byte-identical and no tracked
+  result moves. Do not re-run the evaluation on the strength of that diff.
 
 **Open — waiting on someone else:**
 
