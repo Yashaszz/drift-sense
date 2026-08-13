@@ -695,6 +695,7 @@ def _run_pipeline(
     psf_sigma: float,
     weighted: bool,
     diagnostics: Diagnostics,
+    refine: bool = True,
 ) -> tuple[float, float]:
     """Run Stages 2, 3, 3b, 4 and 5 for one pose hypothesis.
 
@@ -713,6 +714,11 @@ def _run_pipeline(
         Whether to weight the correlation by the reference's uniqueness map.
     diagnostics
         Evidence record, updated in place.
+    refine
+        Whether to run Stage 5. When ``False`` the integer peak centre is
+        returned unrefined. Deliberately absent from the cache key: a
+        :class:`_StageCache` is built per :func:`localize` call, so ``refine``
+        cannot vary across the tiers sharing one cache.
 
     Returns
     -------
@@ -804,24 +810,42 @@ def _run_pipeline(
 
     centre_x, centre_y = best.centre(template.shape)
 
-    with _stage_timer(diagnostics, "refine_subpixel"):
-        refinement = matcher.refine_subpixel_detailed(
-            template,
-            search,
-            best,
-            surface=surface,
-            upsample=config.DEFAULT_UPSAMPLE,
-        )
+    # Stage 5. Skipping it reports the refinement as *absent* rather than as
+    # zero-error: nan is this module's absent-measurement convention, matching
+    # peak_to_sidelobe, and "none" is already the Diagnostics default for a
+    # stage that did not run. No field appears or disappears either way.
+    #
+    # The timer sits inside the gate, so a skipped Stage 5 records no timing
+    # rather than a zero one. An ablation row comparing refine=True against
+    # refine=False should show the stage absent from the breakdown, not present
+    # and free.
+    if refine:
+        with _stage_timer(diagnostics, "refine_subpixel"):
+            refinement = matcher.refine_subpixel_detailed(
+                template,
+                search,
+                best,
+                surface=surface,
+                upsample=config.DEFAULT_UPSAMPLE,
+            )
+        centre = (centre_x + refinement.dx, centre_y + refinement.dy)
+        subpixel_error = refinement.error
+        subpixel_method = refinement.method
+    else:
+        centre = (centre_x, centre_y)
+        subpixel_error = float("nan")
+        subpixel_method = "none"
+
     outcome = _TierOutcome(
-        centre=(centre_x + refinement.dx, centre_y + refinement.dy),
+        centre=centre,
         n_tied=len(tied),
         tie_break_used=tie_break_used,
         ncc_peak=best.score,
         theta_est=pose_estimate.theta_deg,
         scale_est=pose_estimate.scale,
         psr=diagnostics.psr,
-        subpixel_error=refinement.error,
-        subpixel_method=refinement.method,
+        subpixel_error=subpixel_error,
+        subpixel_method=subpixel_method,
     )
     cache.store(key, outcome)
     return outcome.apply(diagnostics)
@@ -880,6 +904,7 @@ def localize(
     search: AnyArray,
     reference: AnyArray,
     mode: Mode = "auto",
+    refine: bool = True,
 ) -> LocalizationResult:
     """Locate the reference image inside the search image.
 
@@ -893,6 +918,13 @@ def localize(
     mode
         Operating mode. ``"auto"`` starts cheap and escalates on a weak
         detection statistic. See :data:`src.types.Mode`.
+    refine
+        Whether to run Stage 5 sub-pixel refinement. ``False`` returns the
+        integer peak centre from Stage 3b and reports ``subpixel_error`` as
+        ``nan`` with ``subpixel_method`` as ``"none"``; every other diagnostic
+        field is unchanged. Provided to measure what refinement contributes
+        independently of disambiguation, rather than deriving it. Defaults to
+        ``True``, so existing callers are unaffected.
 
     Returns
     -------
@@ -937,7 +969,7 @@ def localize(
             # it costs three correlations instead of one, and it only helps when
             # the cheap path has already reported weak evidence.
             centre_x, centre_y = _run_pipeline(
-                cache, search_f, pose_estimate, psf_sigma, tier != "fast", diagnostics
+                cache, search_f, pose_estimate, psf_sigma, tier != "fast", diagnostics, refine
             )
             if not _should_escalate(diagnostics, tier):
                 break
