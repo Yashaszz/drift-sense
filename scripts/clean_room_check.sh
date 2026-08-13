@@ -26,11 +26,17 @@ echo "    $(find "$CLEAN" -type f | wc -l | tr -d ' ') tracked files"
 echo "==> Resolving the environment from the lockfile"
 (cd "$CLEAN" && uv sync --all-extras >/dev/null)
 
+# Piping these into `tail` would be a trap: tail exits early, the producer takes
+# SIGPIPE, and `set -o pipefail` aborts the script at 141 having reported
+# success for every stage it did reach. Log to a file and read the tail instead.
 echo "==> Test suite"
-(cd "$CLEAN" && uv run pytest -q | tail -2)
+(cd "$CLEAN" && uv run pytest -q >"$CLEAN/pytest.log" 2>&1)
+tail -2 "$CLEAN/pytest.log"
 
 echo "==> Lint and types"
-(cd "$CLEAN" && uv run ruff check src tests benchmarks && uv run mypy | tail -1)
+(cd "$CLEAN" && uv run ruff check src tests benchmarks)
+(cd "$CLEAN" && uv run mypy >"$CLEAN/mypy.log" 2>&1)
+tail -1 "$CLEAN/mypy.log"
 
 # The CLI is the deliverable, so it is exercised on images the clean tree has
 # never seen. The dataset is gitignored and absent by design; a grader supplies
@@ -41,8 +47,9 @@ if [[ -n "$PAIR" && -f "$PAIR" ]]; then
   cp "$PAIR" "$CLEAN/reference.png"
   cp "$ROOT/dataset/search/$NAME" "$CLEAN/search.png"
   echo "==> CLI end to end on $NAME"
-  (cd "$CLEAN" && uv run python -m src.localize search.png reference.png --json |
-    grep -E '"(x|y|confidence|low_confidence_flag|mode_used)"')
+  (cd "$CLEAN" && uv run python -m src.localize search.png reference.png --json \
+    >"$CLEAN/cli.json" 2>&1)
+  grep -E '"(x|y|confidence|low_confidence_flag|mode_used)"' "$CLEAN/cli.json"
 else
   echo "==> CLI skipped: no dataset/ locally to borrow a pair from"
 fi
