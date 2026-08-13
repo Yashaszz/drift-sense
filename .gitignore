@@ -284,3 +284,13 @@ dataset_holdout/
 dataset_full/*
 !dataset_full/dataset_manifest.json
 !dataset_full/ground_truth.jsonl
+
+# dataset_control is the paired noise-free control for dataset/ — the same 324
+# scenes and the same seeds, with noise_level alone changed, which is what lets
+# results/control_324.csv be compared per pair instead of in aggregate. Same
+# treatment as dataset_full: images out, provenance in. Until this rule existed
+# the directory was untracked *and* unignored, so a `git add -A` would have
+# committed 324 pairs of PNGs.
+dataset_control/*
+!dataset_control/dataset_manifest.json
+!dataset_control/ground_truth.jsonl
