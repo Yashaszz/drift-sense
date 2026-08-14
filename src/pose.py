@@ -27,6 +27,7 @@ Never raises.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 import numpy as np
 from scipy import ndimage
@@ -40,8 +41,8 @@ __all__ = ["estimate_pose"]
 logger = logging.getLogger(__name__)
 
 
-# The real-data generator uses rotations in [-8, +8] degrees.  Wider
-# Fourier-Mellin hypotheses on periodic, translated crops are aliases.
+# The real-data generator uses rotations in [-8, +8] degrees.
+# Wider Fourier-Mellin hypotheses on periodic, translated crops are aliases.
 _MAX_DATASET_ROTATION_DEG = 10.0
 _MIN_FM_QUALITY = 0.20
 
@@ -93,14 +94,18 @@ def _prepare(image: FloatArray, size: int) -> np.ndarray:
     x = (x - float(x.mean())) / (std + 1e-7)
 
     if x.shape != (size, size):
-        x = resize(
-            x,
-            (size, size),
-            order=1,
-            mode="reflect",
-            anti_aliasing=True,
-            preserve_range=True,
-        ).astype(np.float32)
+        resized = cast(
+            np.ndarray,
+            resize(
+                x,
+                (size, size),
+                order=1,
+                mode="reflect",
+                anti_aliasing=True,
+                preserve_range=True,
+            ),
+        )
+        x = resized.astype(np.float32)
 
     # Remove low-frequency illumination variation.
     low = ndimage.gaussian_filter(
@@ -127,7 +132,10 @@ def _fft_log_magnitude(image: np.ndarray) -> np.ndarray:
 
     magnitude = np.abs(spectrum)
 
-    return np.log1p(magnitude).astype(np.float32)
+    return np.asarray(
+        np.log1p(magnitude),
+        dtype=np.float32,
+    )
 
 
 def _log_polar(magnitude: np.ndarray) -> np.ndarray:
@@ -141,15 +149,21 @@ def _log_polar(magnitude: np.ndarray) -> np.ndarray:
 
     radius = min(h, w) / 2.0
 
-    result = warp_polar(
-        magnitude,
-        center=center,
-        radius=radius,
-        output_shape=(h, w),
-        scaling="log",
+    result = cast(
+        np.ndarray,
+        warp_polar(
+            magnitude,
+            center=center,
+            radius=radius,
+            output_shape=(h, w),
+            scaling="log",
+        ),
     )
 
-    return result.astype(np.float32)
+    return np.asarray(
+        result,
+        dtype=np.float32,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -218,14 +232,19 @@ def _rotate_scale(
 
     offset = centre - matrix @ centre
 
-    return ndimage.affine_transform(
+    transformed = ndimage.affine_transform(
         image,
         matrix=matrix,
         offset=offset,
         output_shape=image.shape,
         order=1,
         mode="reflect",
-    ).astype(np.float32)
+    )
+
+    return np.asarray(
+        transformed,
+        dtype=np.float32,
+    )
 
 
 def _pose_score(
@@ -317,22 +336,29 @@ def _estimate_fourier_mellin(
     ref_lp *= window
     sea_lp *= window
 
-    # Use several local maxima from the unnormalised spectral-correlation
-    # surface.  Phase-normalised correlation gives periodic aliases undue
-    # weight on these SEM crops.  Limit candidates to the generator's
-    # physically valid rotation band and choose its strongest local peak.
+    # Use several local maxima from the unnormalised
+    # spectral-correlation surface.
     corr = np.fft.ifft2(np.fft.fft2(ref_lp) * np.conj(np.fft.fft2(sea_lp)))
 
     corr_abs = np.abs(corr)
-    row_shifts = np.arange(side, dtype=np.float32)
+
+    row_shifts = np.arange(
+        side,
+        dtype=np.float32,
+    )
+
     row_shifts[row_shifts > side // 2] -= side
+
     allowed_rows = np.abs(row_shifts / float(side) * 360.0) <= _MAX_DATASET_ROTATION_DEG
+
     local_peaks = corr_abs == ndimage.maximum_filter(
         corr_abs,
         size=(3, 3),
         mode="wrap",
     )
+
     candidate_mask = local_peaks & allowed_rows[:, None]
+
     candidate_indices = np.argwhere(candidate_mask)
 
     if candidate_indices.size == 0:
@@ -342,10 +368,13 @@ def _estimate_fourier_mellin(
         candidate_indices[:, 0],
         candidate_indices[:, 1],
     ]
+
     strongest = candidate_indices[np.argsort(candidate_values)[::-1][:8]]
+
     best_y, best_x = strongest[0]
 
     dy = float(row_shifts[best_y])
+
     dx = float(best_x if best_x <= side // 2 else best_x - side)
 
     # Log-polar vertical displacement -> rotation.
@@ -379,19 +408,27 @@ def _estimate_fourier_mellin(
         )
     )
 
-    # Confidence is angular discrimination, not global spectral energy.
-    # Ignore peaks within 2 degrees because they belong to the same broad
-    # angular lobe; compare the selected lobe with distinct-angle rivals.
+    # Confidence is angular discrimination.
     winner_angle = _normalize_angle(dy / float(side) * 360.0)
+
     winner_value = float(corr_abs[best_y, best_x])
+
     rival_values = []
 
     for candidate_y, candidate_x in strongest[1:]:
         candidate_angle = _normalize_angle(float(row_shifts[candidate_y]) / float(side) * 360.0)
+
         angular_gap = abs(_normalize_angle(candidate_angle - winner_angle))
 
         if angular_gap >= 2.0:
-            rival_values.append(float(corr_abs[candidate_y, candidate_x]))
+            rival_values.append(
+                float(
+                    corr_abs[
+                        candidate_y,
+                        candidate_x,
+                    ]
+                )
+            )
 
     if rival_values and winner_value > 1e-8:
         quality = float(
@@ -423,13 +460,6 @@ def _refine_rotation(
 ) -> tuple[float, float]:
     """
     Refine rotation using spatial NCC.
-
-    The previous implementation searched only ±5 degrees.
-    That caused many estimates to become clipped at ±5 degrees.
-
-    New strategy:
-        1. Search ±20 degrees around the FM estimate at 2° steps.
-        2. Fine-search ±2 degrees around the best candidate at 0.25° steps.
 
     Residual scale remains fixed at 1.0.
     """
@@ -463,12 +493,6 @@ def _refine_rotation(
 
     initial_angle = _normalize_angle(float(initial_angle))
 
-    # ---------------------------------------------------------------
-    # Broad coarse search.
-    #
-    # This is deliberately much wider than the old ±5° search.
-    # ---------------------------------------------------------------
-
     coarse_angles = np.arange(
         initial_angle - 20.0,
         initial_angle + 20.01,
@@ -490,10 +514,6 @@ def _refine_rotation(
         if score > best_score:
             best_score = score
             best_angle = angle
-
-    # ---------------------------------------------------------------
-    # Fine search around the coarse optimum.
-    # ---------------------------------------------------------------
 
     fine_angles = np.arange(
         best_angle - 2.0,
@@ -599,7 +619,6 @@ def _fallback(
             best_score = score
             best_angle = float(angle)
 
-    # Fine refinement.
     fine_angles = np.arange(
         best_angle - 1.0,
         best_angle + 1.001,
@@ -663,9 +682,7 @@ def estimate_pose(
             Estimated rotation.
 
         scale:
-            TOTAL scale:
-
-                nominal_scale * residual_scale
+            TOTAL scale.
 
         quality:
             Confidence-like value in [0, 1].
@@ -696,10 +713,6 @@ def estimate_pose(
         if not np.isfinite(nominal_scale) or nominal_scale <= 0.0:
             raise ValueError("invalid nominal scale")
 
-        # -----------------------------------------------------------
-        # Fourier-Mellin estimate
-        # -----------------------------------------------------------
-
         (
             fm_angle,
             fm_scale,
@@ -716,19 +729,15 @@ def estimate_pose(
             fm_quality,
         )
 
-        # Spatial NCC cannot validate pose here: it compares different crops
-        # without first solving their translation.  On periodic layouts it
-        # creates false angle maxima, which is why the ±20 degree search
-        # degraded the full-dataset result.  Fourier magnitude is translation
-        # invariant, so retain that angle only when its peak is credible and
-        # the result is inside the generator's physically valid rotation band.
         if fm_quality >= _MIN_FM_QUALITY and abs(fm_angle) <= _MAX_DATASET_ROTATION_DEG:
             final_angle = fm_angle
             quality = fm_quality
+
             logger.debug("FM decision: accepted spectral rotation")
         else:
             final_angle = 0.0
             quality = 0.0
+
             logger.debug("FM decision: nominal-angle fallback")
 
         return PoseEstimate(
@@ -738,10 +747,6 @@ def estimate_pose(
         )
 
     except Exception:
-        # -----------------------------------------------------------
-        # Safe fallback.
-        # -----------------------------------------------------------
-
         try:
             safe_nominal_scale = float(nominal_scale)
 
