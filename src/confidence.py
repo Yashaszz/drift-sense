@@ -28,16 +28,31 @@ Status
 Fitted, serialised and wired (T7). On the current data it does **not**
 discriminate: cross-validated AUC is 0.504 over 108 pairs, which is chance.
 
-That is a data problem, not a model problem. Four of the six features are
-constant because the diagnostics feeding them are still stubs: ``n_tied`` and
-the pose residuals never vary, and ``uniqueness_score`` is a constant while R3's
-map returns ones. Only ``psr`` (AUC 0.606) and ``ncc_peak`` (0.540) carry
-anything at all.
+That is a data problem, not a model problem. **Three** of the six features are
+constant because the diagnostics feeding them are still stubs: ``n_tied`` never
+varies with ``TIE_SIGMA = 0.0``, and both pose residuals are pinned while
+``estimate_pose`` returns nominal. Measured on ``results/full_324.csv``:
 
-The signal that would work is known and measured. Accuracy splits 77.8% on
-anchored references against 0.0% on unanchored ones, and ``uniqueness_score`` is
-precisely the feature designed to capture that. Substituting a working map in
-the counterfactual takes cross-validated AUC from 0.506 to **0.926**.
+===================  ========  ==========================
+feature              variance  AUC against a correct answer
+===================  ========  ==========================
+``uniqueness_score``  5.0e-04   0.585
+``psr``               6.9e-01   0.581
+``ncc_peak``          9.1e-02   0.539
+``log1p_n_tied``      0.0       dead
+``scale_residual``    0.0       dead
+``abs_theta``         0.0       dead
+===================  ========  ==========================
+
+``uniqueness_score`` is **no longer constant** — R3's map has been real since
+PR #13, and it is now the best single feature, though only just. The
+counterfactual that predicted AUC 0.926 from a working map did not survive
+contact with the real one: the map varies, and cross-validated AUC is 0.570.
+
+The signal that would work is still known. Accuracy splits **0.852 on anchored
+references against 0.000 on unanchored ones** (324-pair set), and an oracle
+anchored/unanchored indicator scores **AUC 0.924** on its own. No available
+diagnostic recovers that split, which is why the model stays at chance.
 
 So no fitted model ships. ``localize`` falls back to the conservative heuristic,
 which is honest about knowing little, rather than to a calibrator that would

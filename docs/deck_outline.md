@@ -193,7 +193,7 @@ Noise barely moves the result — ZNCC is normalised, and the accuracy at the
   reproduced both exactly against the Windows values.
 - **Clean-room check** (`scripts/clean_room_check.sh`): unpacks `git archive` —
   what a grader unzips, no venv, no dataset, no artefacts — resolves from the
-  lockfile, runs 497 tests, the linters, and the CLI. It found five stale CSVs
+  lockfile, runs 576 tests, the linters, and the CLI. It found five stale CSVs
   shipping at the archive root; they are gone.
 - **The README's numbers are generated** from the tracked CSVs, with the machine
   attached, and a test fails when they drift.

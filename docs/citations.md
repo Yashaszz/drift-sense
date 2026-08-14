@@ -39,31 +39,47 @@ Numbered sources are listed in §7.
 | DRAM line pitch | 180 nm nominal | **[M]** | Periodic word-line/bit-line arrays on a fixed pitch are the defining feature of DRAM array regions [8, 9]. The magnitude is ours — see the deviation note below. |
 | DRAM line width | 40 nm nominal | **[A]** | Chosen for a line:space ratio that survives the 10 nm/px search sampling. |
 | DRAM via diameter | 60 nm nominal | **[A]** | As above. |
-| FinFET fin pitch | 90 nm nominal | **[M]** | Fins on a uniform sub-100 nm pitch, crossed by gates on a coarser pitch, is the FinFET standard-cell topology [10]. Intel's 22 nm tri-gate is on a 60 nm fin pitch and a 90 nm contacted gate pitch [10, 11]. |
+| FinFET fin pitch | 90 nm nominal | **[M]** | Fins on a uniform sub-100 nm pitch, crossed by gates on a coarser pitch, is the FinFET standard-cell topology [10]. Intel's 22 nm SoC platform is on a 60 nm fin pitch and a 90 nm contacted gate pitch [11], quoted verbatim from the primary in `docs/citations_layout.md`. |
 | FinFET fin width | 24 nm nominal | **[A]** | Real fins are far narrower — Auth et al. report an 8 nm fin width at 22 nm [10]. Widened here so a fin is more than a single pixel after decimation. |
 | FinFET gate width | 13 nm nominal | **[A]** | |
 | FinFET gate pitch | 420 nm nominal | **[A]** | Set so that a 1000 nm reference crop contains more than one gate; an earlier revision put two gates across the whole 12 µm layout and the crop saw at most one (`src/layouts.py:221`). |
 | Pitch randomisation | ±20% | **[A]** | From the work-split document, pinned by `tests/test_geometry.py:339`. |
 | Linewidth randomisation | ±15% | **[A]** | As above. |
 
-**The deviation, stated plainly.** These dimensions are roughly **2–5×
-relaxed** from real silicon, family by family:
+**The deviation, stated plainly.** These dimensions are relaxed from real
+silicon by **1.5× to 5×, depending on which dimension you compare**:
 
 | ours | nearest real reference | ratio |
 |---|---|---|
-| fin pitch 90 nm | 60 nm, Intel 22 nm tri-gate [10, 11] | 1.5× |
-| fin pitch 90 nm | 42 nm, Intel 14 nm [11] | 2.1× |
-| gate pitch 420 nm | 90 nm contacted gate pitch, Intel 22 nm [10] | 4.7× |
+| fin pitch 90 nm | 60 nm, Intel 22 nm SoC [11] | 1.5× |
+| gate pitch 420 nm | 90 nm contacted gate pitch, Intel 22 nm SoC [11] | 4.7× |
 | fin width 24 nm | 8 nm, Intel 22 nm [10] | 3.0× |
-| DRAM pitch 180 nm | sub-20 nm-class M1 half-pitch, i.e. sub-40 nm pitch [8, 9] | ~4–5× |
+| DRAM pitch 180 nm | 60 nm at a 30 nm half-pitch, IRDS ground rules [8] | 3.0× |
 
-This is deliberate and it is a *sampling* constraint, not a
-modelling claim: the search image is captured at 10 nm/px, so a 40 nm real
-word-line pitch spans 4 px and sits at the Nyquist limit of the image the
-matcher actually receives. The lattice would alias rather than correlate, and
-the benchmark would measure aliasing. At 180 nm the pitch spans 18 search
-pixels and the ambiguity being studied — *many identical lattice placements* —
-is present without being confounded by undersampling.
+Every row is a **primary, verbatim-quoted** figure — see
+`docs/citations_layout.md`. Earlier drafts also compared against Intel 14 nm
+(42 nm fin pitch) and 22FFL; both were second-hand and have been dropped rather
+than carried unverified, per PR #27.
+
+This is deliberate, and the reason is **contrast, not sampling.** An earlier
+revision of this document argued that real pitches would alias at 10 nm/px.
+That was wrong, and `docs/assumptions.md` §4 is the correction: Nyquist needs
+≥2 px/period, and the tightest confirmed real pitch — 60 nm — clears it at
+6 px/period, so nothing in the dataset aliases.
+
+What actually binds is the modulation surviving R2's search PSF (σ = 12 nm).
+Through a Gaussian MTF, a 60 nm real pitch — Intel's confirmed 22 nm fin pitch,
+and equally the DRAM pitch at a 30 nm half-pitch — reaches the search image at
+**45% contrast before any noise is added**. Under the `high` noise stratum,
+where dose falls to 0.35 of the search preset, that margin is thin, and tighter
+geometry drops to or below the shot-noise floor. At those dimensions the task is
+not hard, it is **ill-posed** — every unanchored pair would fail for reasons that
+say nothing about the matcher. Our geometry
+lands at 58–94% contrast against 45–74% for every confirmed real dimension.
+
+The full derivation and the per-feature contrast table are in
+`docs/assumptions.md` §4, which is the authority for this argument; this
+section defers to it rather than restating it.
 
 The consequence for the results: **the periodic-ambiguity problem is modelled
 faithfully; the specific node is not.** Nothing in the pipeline is tuned to a
@@ -255,8 +271,11 @@ noise model be argued about per-pair instead of in aggregate
     featuring fully-depleted tri-gate transistors, self-aligned contacts and
     high density MIM capacitors," *Symposium on VLSI Technology*, 131–132,
     2012.
-11. WikiChip, "22 nm lithography process."
-    https://en.wikichip.org/wiki/22_nm_lithography_process
+11. C.-H. Jan et al., "A 22nm SoC platform technology featuring 3-D tri-gate
+    and high-k/metal gate, optimized for ultra low power, high performance and
+    high density SoC applications," *IEDM*, 2012. Fin pitch 60 nm, contacted
+    gate pitch 90 nm; extracted from the primary PDF and quoted verbatim in
+    `docs/citations_layout.md`.
 12. J. Tobin et al., "Domain randomization for transferring deep neural
     networks from simulation to the real world," *IROS*, 2017.
 13. I. Koren, Z. Koren, "Defect tolerance in VLSI circuits: techniques and
@@ -307,7 +326,13 @@ noise model be argued about per-pair instead of in aggregate
 ## 6. Verification status
 
 Checked against the publisher record on **2026-08-13**: [1], [5], [8], [9],
-[10], [11], [15].
+[10], [15]. Source [11] was extracted from the primary PDF by R1 and is quoted
+verbatim in `docs/citations_layout.md`.
+
+A WikiChip entry previously stood in for [11]. It was second-hand, and PR #27
+dropped it after the site refused connections on three attempts — along with
+the Intel 14 nm and 22FFL figures that depended on it. Nothing in this document
+now rests on a source that has not been opened.
 
 The remainder are standard works in their fields, written from the literature
 rather than re-checked against a publisher record on that date. Volume, issue
