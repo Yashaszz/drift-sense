@@ -6,7 +6,7 @@ readings of a genuinely underdetermined problem.
 All numbers come from `results/full_324.csv` and `results/baseline_324.csv`
 over **324 stratified pairs** (2 architectures x 2 anchor states x 3 pose
 conditions x 3 noise strata x 9 seeds), 1 px success tolerance. Reproduction
-commands in section 8.
+commands in section 9.
 
 **These renders carry real SEM physics.** R2's `apply_sem_chain` is no longer an
 identity passthrough — the noise strata modify Poisson shot noise and read
@@ -199,15 +199,21 @@ standard deviation and compresses PSR toward the same value regardless of
 correctness.
 
 **Consequence:** with accept thresholds at 8.0 (fast) and 4.0 (robust),
-**320 of 324 cases escalate** to the ambiguous tier — 3 accept at `robust`, 1 at
-`fast`. Slow, but almost never falsely confident. The thresholds are
-deliberately untuned: lowering them to buy speed would buy it by making wrong
-answers confident.
+**323 of 324 cases escalate** to the ambiguous tier on the development set —
+one accepts at `fast`, and it is correct. Slow, but almost never falsely
+confident.
+
+**On the holdout, that "almost" is the whole story.** Two cases clear the
+threshold there and **both are wrong** — see section 8. The thresholds stay
+deliberately untuned: lowering them to buy speed would buy it by making more
+wrong answers confident, and unseen data has now shown that the ones which do
+get through are wrong more often than not.
 
 > **Do not state that PSR is capped near 3.4.** That figure comes from the
-> superseded 108 set. On 324 the observed maximum is **12.314**, with 2 cases
-> at or above 8.0 and 4 at or above 4.0. The "everything escalates" conclusion
-> survives at 98.8%, but the 3.4 ceiling is falsifiable by opening the CSV.
+> superseded 108 set. On the development set the observed maximum is **12.314**
+> with 1 case at or above 8.0; on the holdout it reaches **14.966** with 2. The
+> "everything escalates" conclusion survives at 99.7% and 99.4% respectively,
+> but the 3.4 ceiling is falsifiable by opening either CSV.
 
 One measurement bug was found and fixed in an earlier pass: sidelobe statistics
 excluded a **Euclidean disc** around the peak while peak extraction suppresses
@@ -361,14 +367,90 @@ detected breakdown.
 
 ---
 
-## 8. How to reproduce
+## 8. The holdout: what survived contact with unseen data
+
+Everything above is measured on `dataset/`, which is also the set the system was
+developed against. `dataset_holdout` is 324 pairs on seed 389722107, disjoint
+from that set, with its image and file tree hashes **pre-registered before
+generation** and reproduced byte-for-byte across a Windows and a Mac run. It was
+scored **once**, after all development stopped, and never used to make a
+decision.
+
+### Accuracy generalised
+
+| metric, anchored (n=162) | development | holdout | delta |
+|---|---|---|---|
+| success @ 1 px | 0.938 | **0.951** | +0.012 |
+| success @ 2 px | 0.944 | 0.963 | +0.019 |
+| success @ 4 px | 0.944 | 0.975 | +0.031 |
+| success @ 5 px | 0.944 | 0.975 | +0.031 |
+| median error | 0.035 px | 0.031 px | −0.004 |
+| median latency | 389 ms | 382 ms | −7 ms |
+
+All-pairs accuracy is 0.469 against 0.475. No stratum moves by more than a
+handful of cases, and the two that move most — DRAM +0.049, FinFET −0.025 — sit
+well inside what n=81 supports. **Nothing in the accuracy story was overfit.**
+
+### Calibration did not
+
+This is the finding the holdout was for.
+
+| | development | holdout |
+|---|---|---|
+| cases accepted without a low-confidence flag | 1 | 2 |
+| of those, wrong | **0** | **2** |
+
+| case | error | PSR | confidence |
+|---|---|---|---|
+| `finfet_anchored_pose-small_0201` | 1.49 px | 11.83 | 0.871 |
+| `finfet_anchored_pose-large_0236` | 1.66 px | 14.97 | 0.970 |
+
+Both clear the 8.0 accept threshold with room to spare. Both are FinFET, whose
+coarse gate lattice produces genuine, strong sidelobes that PSR reads as a clean
+isolated peak — the exact structural failure described in section 4, now
+demonstrated on data the system had never seen.
+
+On the development set the system was confident once and was right, which
+invites the claim *"zero confident wrong answers."* **That claim does not
+survive the holdout and must not be made.** The defensible statement is:
+
+> Accuracy generalises. Calibration does not. PSR is a detection statistic, and
+> on periodic layouts it cannot distinguish a correct peak from a confident one
+> — which is why the thresholds are untuned and why every answer ships with a
+> flag rather than a bare number.
+
+### The tolerance caveat, stated rather than exploited
+
+Both confident errors are **under 1.7 px**. At the problem statement's 2 px
+tolerance they score as passes and the confident-error count reads zero again.
+The failure is real at 1 px and disappears at 2 px.
+
+That is worth saying out loud, because reporting only the tolerance that
+flatters the system is the same error as quoting a 108-set number: defensible
+in isolation, indefensible once someone opens the CSV.
+
+### What this licenses us to claim
+
+- **Do** claim 0.951 anchored on 324 unseen pairs from a pre-registered seed.
+- **Do** claim the accuracy is not overfit, and show both columns.
+- **Do not** claim the system never answers confidently and wrongly.
+- **Do** claim we tested that assertion deliberately and reported it failing.
+
+---
+
+## 9. How to reproduce
 
 ```bash
 uv run python -m src.evaluate     --data dataset --gt dataset/ground_truth.jsonl --out results/full_324.csv
 uv run python -m src.baseline_ncc --data dataset --gt dataset/ground_truth.jsonl --out results/baseline_324.csv
 uv run python -m src.ablate       --data dataset --gt dataset/ground_truth.jsonl --out results/ablation_324.csv
 uv run python -m src.recall       --data dataset --gt dataset/ground_truth.jsonl --out results/recall_324.csv --max-k 30
+uv run python -m src.evaluate     --data dataset_control --out results/control_324.csv
+uv run python -m src.evaluate     --data dataset_holdout --out results/holdout_324.csv
 ```
+
+The holdout line is deliberately last. It was run **once**, after development
+stopped; re-running it during tuning is how a holdout stops being one.
 
 Pass `--gt` explicitly. A silently wrong ground-truth path poisons every number
 in this document.

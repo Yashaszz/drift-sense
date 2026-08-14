@@ -18,8 +18,8 @@ table at the end maps slide to source.
 
 ## Rules for anyone editing this deck
 
-Five ways to be wrong in front of a judge. The first four have already happened
-once in this repo.
+Six ways to be wrong in front of a judge. Five have already happened once in
+this repo, and the sixth nearly reached this deck.
 
 1. **Never quote a 108-set number.** That set was physics-free and is
    superseded. Anchored 77.8%, 105 ms and 0.01 px sub-pixel are all from it.
@@ -32,6 +32,9 @@ once in this repo.
 4. **Never say PSR is capped near 3.4.** 324-set maximum is 12.314.
 5. **Never claim our dimensions match a production node.** They are relaxed
    1.5–5x, for the contrast reason on slide 4. Say it before you are asked.
+6. **Never claim we have zero confident wrong answers.** True on the set we
+   developed against, false on the holdout, where both accepted answers were
+   wrong. Slide 6 states it correctly; do not "simplify" it back.
 
 ---
 
@@ -152,22 +155,43 @@ flag.
 
 Template slot 6 continued, the **10% block**, plus the RGB bonus.
 
-**The system is confident about exactly 1 of 324 cases, and it is correct.**
-The other 323 escalate, answer, and carry a low-confidence flag. **Zero
-confident wrong answers.**
+### We held out 324 pairs and tested ourselves
 
-That number used to be worse, and how it improved is the point. Before rotation
-estimation landed we were confident about 2 cases and **one of them was wrong**
-— `finfet_anchored_pose-large_0226`, 2.28 px error at PSR 8.13 against an accept
-threshold of 8.0. We put that failure in this deck rather than hide it. Pose
-estimation then fixed its cause: the same pair now lands at **0.098 px**, and
-its PSR fell to 1.81 so it would be flagged rather than accepted regardless.
+A second dataset, seed 389722107, disjoint from the one we developed against,
+with its tree hashes **registered before it was generated**. Scored **once**,
+after development stopped.
 
-The thresholds stay deliberately untuned. **PSR does not separate correct from
-incorrect on periodic layouts**, because the sidelobe region it normalises
-against contains genuine lattice peaks rather than noise. Lowering thresholds
-would buy speed by manufacturing exactly the confident wrong answers we no
-longer have.
+| anchored, n=162 | developed on | **never seen** |
+|---|---|---|
+| success @ 1 px | 0.938 | **0.951** |
+| success @ 4 px | 0.944 | **0.975** |
+| median error | 0.035 px | **0.031 px** |
+
+**Accuracy generalised. Our confidence measure did not** — and that is the
+result worth your attention.
+
+On the development set the system accepted one answer without a flag and it was
+correct. On the holdout it accepted two, and **both were wrong**:
+
+| case | error | PSR | accept threshold |
+|---|---|---|---|
+| `finfet_anchored_pose-small_0201` | 1.49 px | 11.83 | 8.0 |
+| `finfet_anchored_pose-large_0236` | 1.66 px | 14.97 | 8.0 |
+
+Both are FinFET, whose coarse gate lattice produces genuine strong sidelobes
+that PSR reads as a clean isolated peak. **PSR is a detection statistic, and on
+a periodic layout it cannot tell a correct peak from a confident one.** That is
+why our thresholds stay untuned, and why every answer ships with a flag rather
+than a bare number.
+
+Two honest footnotes, both of which we volunteer:
+
+- Both errors are under 1.7 px, so at the **2 px** tolerance they score as
+  passes and this count reads zero. The failure is real at 1 px and vanishes at
+  2 px. We report it at both rather than pick the flattering one.
+- An earlier revision of this deck claimed *"zero confident wrong answers."* It
+  was true on the data we tuned against. The holdout is what stopped us saying
+  it on stage.
 
 Where the remaining error lives, anchored: **not pose, and not noise.** Pose is
 now nearly flat (0.944 / 0.944 / 0.926 across none / small / large) and the
@@ -182,9 +206,17 @@ surviving period is 237 nm (blue) to 337 nm (red), against a 72–108 nm fin
 pitch. Measured, the best channel retains ~6% of the geometry's contrast. This
 is *why* the problem is posed with an SEM.
 
-> Speaker note: tell it in that order — we found our own confident error,
-> reported it, then removed its cause and verified the fix on the same pair.
-> That sequence is worth more than a clean number with no story behind it.
+> Speaker note: lead with the holdout, not the accuracy. Most teams will show a
+> number from the data they built against; we can show what happened when the
+> system met data it had never seen, including the part that failed. If asked
+> why we volunteered a failure, the answer is that the graders have their own
+> test data and we would rather find this ourselves.
+>
+> Have ready, in case it is asked: the previous confident error
+> (`finfet_anchored_pose-large_0226`, 2.28 px at PSR 8.13) was fixed by pose
+> estimation — the same pair now lands at 0.098 px with PSR 1.81. So the
+> mechanism is understood; it is the *statistic* that does not generalise, not
+> the pipeline.
 
 ## Slide 7 — Technology, repository, video and references
 
