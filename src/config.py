@@ -79,8 +79,19 @@ Flipping this constant is the *only* change required to switch conventions.
 # Evaluation
 # ---------------------------------------------------------------------------
 
-TOLERANCES_PX: Final[tuple[float, ...]] = (0.5, 1.0, 2.0)
-"""Success tolerances in search pixels, equivalently 5 nm / 10 nm / 20 nm."""
+TOLERANCES_PX: Final[tuple[float, ...]] = (1.0, 2.0, 4.0, 5.0)
+"""Success tolerances in search pixels, equivalently 10 / 20 / 40 / 50 nm.
+
+**These are dictated by the problem statement**, which requires pass rates at 5,
+4, 2 and 1 pixels. They are listed ascending here so the reported table reads
+from strictest to loosest; the submission checklist lists them the other way.
+
+An earlier revision used ``(0.5, 1.0, 2.0)`` — 0.5 px is not asked for, and 4 px
+and 5 px were missing entirely. Worse, the constant was referenced nowhere, so
+no pass rate was reported at any tolerance. Both are fixed:
+:func:`src.evaluate.pass_rates` computes the table and
+``scripts/render_results.py`` puts it in the README.
+"""
 
 HEADLINE_TOLERANCE_PX: Final[float] = 1.0
 """The tolerance quoted as the headline accuracy figure (10 nm)."""

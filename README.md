@@ -62,6 +62,15 @@ noise, varied across three strata.
 | median error, anchored | 0.454 px | **0.042 px** |
 | latency, median / p95 | | 212 ms / 215 ms |
 
+Pass rates at the tolerances the problem statement asks for (5, 4, 2 and 1 px):
+
+| tolerance | plain NCC (all / anchored) | full pipeline (all / anchored) |
+|---|---|---|
+| ≤ 5 px | 0.423 / 0.846 | 0.460 / **0.920** |
+| ≤ 4 px | 0.417 / 0.833 | 0.454 / **0.907** |
+| ≤ 2 px | 0.398 / 0.796 | 0.438 / **0.877** |
+| ≤ 1 px | 0.377 / 0.753 | 0.426 / **0.852** |
+
 Latency is a property of the machine, not of the code: macOS-26.5.2-arm64-arm-64bit · Python 3.12.13 · commit `878ea59`. The same 324 pairs on a different machine will report a different figure and the same accuracy.
 
 Regenerate with `uv run python -m src.evaluate --data dataset --out results/full_324.csv`, then `uv run python -m scripts.render_results --write`.
