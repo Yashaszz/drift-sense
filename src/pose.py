@@ -50,6 +50,7 @@ _MIN_FM_QUALITY = 0.20
 # Basic helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_angle(angle: float) -> float:
     """Normalize angle to [-180, 180)."""
     return float((angle + 180.0) % 360.0 - 180.0)
@@ -122,9 +123,7 @@ def _prepare(image: FloatArray, size: int) -> np.ndarray:
 
 def _fft_log_magnitude(image: np.ndarray) -> np.ndarray:
     """Return centered logarithmic FFT magnitude."""
-    spectrum = np.fft.fftshift(
-        np.fft.fft2(image)
-    )
+    spectrum = np.fft.fftshift(np.fft.fft2(image))
 
     magnitude = np.abs(spectrum)
 
@@ -156,6 +155,7 @@ def _log_polar(magnitude: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Correlation helpers
 # ---------------------------------------------------------------------------
+
 
 def _ncc(a: np.ndarray, b: np.ndarray) -> float:
     """Zero-mean normalized cross-correlation."""
@@ -254,6 +254,7 @@ def _pose_score(
 # Fourier-Mellin
 # ---------------------------------------------------------------------------
 
+
 def _estimate_fourier_mellin(
     reference: np.ndarray,
     search: np.ndarray,
@@ -320,18 +321,12 @@ def _estimate_fourier_mellin(
     # surface.  Phase-normalised correlation gives periodic aliases undue
     # weight on these SEM crops.  Limit candidates to the generator's
     # physically valid rotation band and choose its strongest local peak.
-    corr = np.fft.ifft2(
-        np.fft.fft2(ref_lp)
-        * np.conj(np.fft.fft2(sea_lp))
-    )
+    corr = np.fft.ifft2(np.fft.fft2(ref_lp) * np.conj(np.fft.fft2(sea_lp)))
 
     corr_abs = np.abs(corr)
     row_shifts = np.arange(side, dtype=np.float32)
     row_shifts[row_shifts > side // 2] -= side
-    allowed_rows = (
-        np.abs(row_shifts / float(side) * 360.0)
-        <= _MAX_DATASET_ROTATION_DEG
-    )
+    allowed_rows = np.abs(row_shifts / float(side) * 360.0) <= _MAX_DATASET_ROTATION_DEG
     local_peaks = corr_abs == ndimage.maximum_filter(
         corr_abs,
         size=(3, 3),
@@ -347,20 +342,14 @@ def _estimate_fourier_mellin(
         candidate_indices[:, 0],
         candidate_indices[:, 1],
     ]
-    strongest = candidate_indices[
-        np.argsort(candidate_values)[::-1][:8]
-    ]
+    strongest = candidate_indices[np.argsort(candidate_values)[::-1][:8]]
     best_y, best_x = strongest[0]
 
     dy = float(row_shifts[best_y])
     dx = float(best_x if best_x <= side // 2 else best_x - side)
 
     # Log-polar vertical displacement -> rotation.
-    angle = (
-        dy
-        / float(side)
-        * 360.0
-    )
+    angle = dy / float(side) * 360.0
 
     angle = _normalize_angle(angle)
 
@@ -375,14 +364,9 @@ def _estimate_fourier_mellin(
     if log_radius <= 1e-8:
         raise ValueError("invalid log-polar radius")
 
-    residual_scale = np.exp(
-        -(dx / float(side)) * log_radius
-    )
+    residual_scale = np.exp(-(dx / float(side)) * log_radius)
 
-    if (
-        not np.isfinite(residual_scale)
-        or residual_scale <= 0.0
-    ):
+    if not np.isfinite(residual_scale) or residual_scale <= 0.0:
         raise ValueError("invalid residual scale")
 
     # The dataset expects nominal_scale to carry the scale.
@@ -398,26 +382,16 @@ def _estimate_fourier_mellin(
     # Confidence is angular discrimination, not global spectral energy.
     # Ignore peaks within 2 degrees because they belong to the same broad
     # angular lobe; compare the selected lobe with distinct-angle rivals.
-    winner_angle = _normalize_angle(
-        dy / float(side) * 360.0
-    )
+    winner_angle = _normalize_angle(dy / float(side) * 360.0)
     winner_value = float(corr_abs[best_y, best_x])
     rival_values = []
 
     for candidate_y, candidate_x in strongest[1:]:
-        candidate_angle = _normalize_angle(
-            float(row_shifts[candidate_y])
-            / float(side)
-            * 360.0
-        )
-        angular_gap = abs(
-            _normalize_angle(candidate_angle - winner_angle)
-        )
+        candidate_angle = _normalize_angle(float(row_shifts[candidate_y]) / float(side) * 360.0)
+        angular_gap = abs(_normalize_angle(candidate_angle - winner_angle))
 
         if angular_gap >= 2.0:
-            rival_values.append(
-                float(corr_abs[candidate_y, candidate_x])
-            )
+            rival_values.append(float(corr_abs[candidate_y, candidate_x]))
 
     if rival_values and winner_value > 1e-8:
         quality = float(
@@ -440,6 +414,7 @@ def _estimate_fourier_mellin(
 # ---------------------------------------------------------------------------
 # Rotation refinement
 # ---------------------------------------------------------------------------
+
 
 def _refine_rotation(
     reference: np.ndarray,
@@ -486,9 +461,7 @@ def _refine_rotation(
         side,
     )
 
-    initial_angle = _normalize_angle(
-        float(initial_angle)
-    )
+    initial_angle = _normalize_angle(float(initial_angle))
 
     # ---------------------------------------------------------------
     # Broad coarse search.
@@ -558,6 +531,7 @@ def _refine_rotation(
 # ---------------------------------------------------------------------------
 # Bounded fallback
 # ---------------------------------------------------------------------------
+
 
 def _fallback(
     reference: np.ndarray,
@@ -662,6 +636,7 @@ def _fallback(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def estimate_pose(
     reference: FloatArray,
     search: FloatArray,
@@ -714,21 +689,12 @@ def estimate_pose(
             or min(reference.shape) < 8
             or min(search.shape) < 8
         ):
-            raise ValueError(
-                "invalid image dimensions"
-            )
+            raise ValueError("invalid image dimensions")
 
-        nominal_scale = float(
-            nominal_scale
-        )
+        nominal_scale = float(nominal_scale)
 
-        if (
-            not np.isfinite(nominal_scale)
-            or nominal_scale <= 0.0
-        ):
-            raise ValueError(
-                "invalid nominal scale"
-            )
+        if not np.isfinite(nominal_scale) or nominal_scale <= 0.0:
+            raise ValueError("invalid nominal scale")
 
         # -----------------------------------------------------------
         # Fourier-Mellin estimate
@@ -756,10 +722,7 @@ def estimate_pose(
         # degraded the full-dataset result.  Fourier magnitude is translation
         # invariant, so retain that angle only when its peak is credible and
         # the result is inside the generator's physically valid rotation band.
-        if (
-            fm_quality >= _MIN_FM_QUALITY
-            and abs(fm_angle) <= _MAX_DATASET_ROTATION_DEG
-        ):
+        if fm_quality >= _MIN_FM_QUALITY and abs(fm_angle) <= _MAX_DATASET_ROTATION_DEG:
             final_angle = fm_angle
             quality = fm_quality
             logger.debug("FM decision: accepted spectral rotation")
@@ -770,31 +733,20 @@ def estimate_pose(
 
         return PoseEstimate(
             theta_deg=float(final_angle),
-            scale=float(
-                nominal_scale
-            ),
+            scale=float(nominal_scale),
             quality=quality,
         )
 
     except Exception:
-
         # -----------------------------------------------------------
         # Safe fallback.
         # -----------------------------------------------------------
 
         try:
+            safe_nominal_scale = float(nominal_scale)
 
-            safe_nominal_scale = float(
-                nominal_scale
-            )
-
-            if (
-                not np.isfinite(safe_nominal_scale)
-                or safe_nominal_scale <= 0.0
-            ):
-                safe_nominal_scale = float(
-                    config.NOMINAL_SCALE
-                )
+            if not np.isfinite(safe_nominal_scale) or safe_nominal_scale <= 0.0:
+                safe_nominal_scale = float(config.NOMINAL_SCALE)
 
             reference = np.asarray(
                 reference,
@@ -816,12 +768,8 @@ def estimate_pose(
             )
 
             return PoseEstimate(
-                theta_deg=float(
-                    fallback_angle
-                ),
-                scale=float(
-                    safe_nominal_scale
-                ),
+                theta_deg=float(fallback_angle),
+                scale=float(safe_nominal_scale),
                 quality=float(
                     min(
                         fallback_quality,
@@ -831,11 +779,8 @@ def estimate_pose(
             )
 
         except Exception:
-
             return PoseEstimate(
                 theta_deg=0.0,
-                scale=float(
-                    config.NOMINAL_SCALE
-                ),
+                scale=float(config.NOMINAL_SCALE),
                 quality=0.0,
             )
