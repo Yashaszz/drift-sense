@@ -1,0 +1,12 @@
+{
+  "generated_utc": "2026-08-14T16:50:58+00:00",
+  "commit": "109d3ee",
+  "cases": 324,
+  "dataset": "dataset_holdout",
+  "mode": "auto",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "processor": "arm",
+  "python": "3.12.13",
+  "numpy": "2.5.1"
+}
