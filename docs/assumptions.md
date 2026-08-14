@@ -117,20 +117,25 @@ Defined at `generate_dataset.py:143` and `:146`; ranges follow from
 | Process | Fin pitch | Gate pitch (CPP) | Source | Status |
 |---|---|---|---|---|
 | Intel 22 nm SoC | **60 nm** | **90 nm** (108 relaxed) | Jan et al., IEDM 2012 | **confirmed from primary** |
-| Intel 14 nm | 42 nm | — | Bohr, IDF 2014 | search summary only |
-| Intel 22FFL | 45 nm | ~108 nm | IEDM 2017 via WikiChip | search summary only |
 | DRAM, current | — | **60–96 nm pitch** (30–48 nm half-pitch) | IRDS 2023 More Moore §5.1 p28 | **confirmed from primary** |
+
+Earlier drafts also listed Intel 14 nm (42 nm fin pitch) and 22FFL (45 nm /
+~108 nm). Both came from search summaries and WikiChip refused connections on
+three attempts, so they have been **dropped rather than carried unverified**.
+The argument does not need them: the two rows above are primary, and both are
+already tighter than anything we generate.
 
 The Intel 22 nm paper also gives M1 pitch 90 nm and gate lengths 30/34/40 nm.
 IRDS adds that some DRAM lines require ~20 nm half-pitch, and defines the cell
 size factor `a = [cell size]/[half pitch]^2`, 6F2 today against a 4F2 limit.
 
-> **Verification status:** the two rows marked *confirmed* were extracted from
-> the primary PDFs and are quoted verbatim in `docs/citations_layout.md` —
-> those are the ones to cite. The Intel 14 nm and 22FFL rows still come from
-> search summaries and are not needed for the argument; drop them rather than
-> cite them unverified. Every figure here is used only as *contrast* to our
-> values, so an error weakens the framing without corrupting the dataset.
+> **Verification status:** every real-silicon figure above was extracted from a
+> primary PDF and is quoted verbatim in `docs/citations_layout.md`. Nothing
+> unverified remains in this section. The Intel table rows (fin, M1, Lgate) came
+> from table extraction rather than prose, so re-read that table visually before
+> the deck; the two prose figures are quoted exactly. Every number here is used
+> only as *contrast* to our values, so an error weakens the framing without
+> corrupting the dataset.
 
 ### Why we relaxed them — the actual justification
 
@@ -144,7 +149,6 @@ surviving into the search image:
 | Intel 22 nm gate / M1 pitch *(confirmed)* | 90 nm | 9.0 | 70.4% |
 | IRDS DRAM, 30 nm half-pitch *(confirmed)* | 60 nm | 6.0 | **45.4%** |
 | IRDS DRAM, 48 nm half-pitch *(confirmed)* | 96 nm | 9.6 | 73.5% |
-| Intel 14 nm fin pitch *(unverified)* | 42 nm | 4.2 | 20.0% |
 | **Ours, FinFET fin (min)** | 72 nm | 7.2 | **57.8%** |
 | **Ours, FinFET fin (nom)** | 90 nm | 9.0 | 70.4% |
 | **Ours, FinFET fin (max)** | 108 nm | 10.8 | 78.4% |
@@ -155,10 +159,10 @@ Every confirmed real dimension lands at **45–74% contrast**, against our
 **58–94%**. At the tighter end of the DRAM ground rules — 30 nm half-pitch, a
 60 nm pitch — the lattice reaches the search image at 45% contrast *before any
 noise is added*. Under the `high` stratum, where dose is scaled to 0.35 of R2's
-search preset, that margin is thin; at the unverified Intel 14 nm fin pitch it
-falls to 20% and is at or below the shot-noise floor entirely. The task would
-not be hard, it would be ill-posed, and every unanchored FinFET pair would fail
-for reasons that say nothing about the matcher.
+search preset, that margin is thin. Tighter still -- and leading-edge FinFET is
+tighter still -- the lattice falls to or below the shot-noise floor entirely.
+The task would not be hard, it would be ill-posed, and every unanchored FinFET
+pair would fail for reasons that say nothing about the matcher.
 
 Relaxing keeps the periodic structure resolvable while preserving the ordering
 that matters: our FinFET fins (58–78%) still sit below our DRAM (87–94%), so

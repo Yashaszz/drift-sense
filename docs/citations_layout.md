@@ -36,18 +36,6 @@ misattributed number.
 
 ## Process dimension references
 
-**[1] Intel 14 nm process — fin pitch 42 nm**
-Mark Bohr, *14 nm Process Technology: Opening New Horizons*, Intel Developer
-Forum, 2014.
-https://www.intel.com/content/dam/www/public/us/en/documents/pdf/foundry/mark-bohr-2014-idf-presentation.pdf
-- [ ] Confirm 42 nm fin pitch on the slide and note the page number
-
-**[2] Intel 22FFL — fin pitch 45 nm, gate pitch ~108 nm**
-IEDM 2017 disclosure, reported by WikiChip Fuse.
-https://fuse.wikichip.org/news/567/iedm-2017-intel-details-22ffl-a-relaxed-14nm-process-for-foundry-customers-targets-mobile-and-rf-apps/
-- [ ] Confirm both figures
-- [ ] Prefer the IEDM paper itself if reachable; WikiChip is secondary
-
 **[3] Intel 22 nm SoC platform — CONFIRMED from the primary PDF**
 C.-H. Jan et al., *A 22nm SoC Platform Technology Featuring 3-D Tri-Gate and
 High-k/Metal Gate, Optimized for Ultra Low Power, High Performance and High
@@ -68,18 +56,16 @@ Figures extracted from the paper's own text and tables:
       values come from table rows, so re-read the table visually to be certain
       of column alignment before the deck.
 
-**[4] 22 nm lithography process — consolidated node figures**
-WikiChip.
-https://en.wikichip.org/wiki/22_nm_lithography_process
-- [ ] Secondary source; use only to cross-check [2] and [3]
-
-**[5] IRDS More Moore — roadmap tables for fin pitch, CPP, gate length**
-IEEE International Roadmap for Devices and Systems, 2023 and 2024 editions.
+**[5] IRDS More Moore — the parent document for [5a]**
+IEEE International Roadmap for Devices and Systems, 2023 edition (2024 update
+also available).
 https://irds.ieee.org/images/files/pdf/2023/2023IRDS_MM.pdf
 https://irds.ieee.org/images/files/pdf/2024/2024IRDS_MM.pdf
-- [ ] Locate the More Moore table and record the specific table number and year
-      column used. **Note:** the PDF resisted automated text extraction; open it
-      manually.
+- [x] **Resolved.** The DRAM figure we cite is quoted at [5a] from §5.1, p28.
+      The roadmap's logic tables (fin pitch, CPP, gate length by year) are not
+      needed: FinFET comparison comes from [3], which is a primary measurement
+      of a shipped process rather than a projection. Note the PDF is
+      AES-encrypted and defeats naive text extraction.
 
 **[5a] IRDS DRAM ground rules — CONFIRMED from the primary PDF**
 IEEE IRDS 2023, *More Moore*, §5.1 "DRAM", page 28.
@@ -111,25 +97,11 @@ https://www.tel.com/museum/magazine/material/150227_report04_01/
 > scaling indicator, also known as technology node."
 - [x] **Fetched and confirmed.** Gives the definition, not a dimension table.
 
-**[7] DRAM dimensions — secondary, figures NOT confirmed**
-- SK Hynix 30-nm class: wordline pitch measured at **88 nm** in the bitline
-  direction. https://www.eetimes.com/hynix-dram-layout-process-integration-adapt-to-change/
-  - [ ] **Fetch timed out; figure comes from a search summary.** Open manually
-        and confirm before use.
-- Node shorthand ≈ active-area half-pitch, 1X ≈ 18 nm, 1Y ≈ 17 nm (so ~36 nm
-  pitch at 1X).
-  - [ ] Attribution unclear from search; find the source or drop the figure.
-- https://blog.entegris.com/dram-device-fabrication (30–40 nm half-pitch class)
-  - [ ] Secondary, vendor blog. Cross-check only.
-
-> **Honest status:** no primary DRAM process paper secured after several
-> attempts. What *is* solid is the definition [6], which is enough to support
-> the relaxation argument qualitatively — our 180 nm pitch is several times any
-> recent DRAM node however the node is defined. If a primary source cannot be
-> found, state the DRAM comparison qualitatively and cite [6] for the
-> definition. Do not quote 88 nm or 18 nm until [7] is opened and confirmed.
-
----
+**[7] DRAM secondary sources — dropped**
+Superseded by [5a], which is primary. The earlier secondary items (an SK Hynix
+88 nm wordline-pitch figure via EE Times, a 1X ~ 18 nm half-pitch attribution,
+and a vendor blog) are removed rather than carried unverified: two would not
+fetch and the third was a blog. Nothing in the argument needs them.
 
 ## Numbers that need no external citation
 
