@@ -30,12 +30,10 @@ import logging
 
 import numpy as np
 from scipy import ndimage
-from skimage.registration import phase_cross_correlation
 from skimage.transform import resize, warp_polar
 
 from src import config
 from src.types import FloatArray, PoseEstimate
-
 
 __all__ = ["estimate_pose"]
 
@@ -263,7 +261,8 @@ def _estimate_fourier_mellin(
     """
     Estimate rotation and residual scale.
 
-    Returns:
+    Returns
+    -------
         angle_deg
         residual_scale
         quality
@@ -698,7 +697,6 @@ def estimate_pose(
 
     The function never raises.
     """
-
     try:
         reference = np.asarray(
             reference,
