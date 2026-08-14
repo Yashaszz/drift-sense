@@ -28,6 +28,10 @@ dev = [
 
 [project.scripts]
 drift-localize = "src.localize:main"
+# generate_dataset already sets prog="drift-generate-dataset", so its usage and
+# error messages name this command. Without the entry point those messages
+# pointed at something that did not exist.
+drift-generate-dataset = "src.generate_dataset:main"
 
 [build-system]
 requires = ["hatchling"]

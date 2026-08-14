@@ -26,7 +26,10 @@ fitted model is present, :class:`ConfidenceModel` falls back to
 Status
 ------
 Fitted, serialised and wired (T7). On the current data it does **not**
-discriminate: cross-validated AUC is 0.504 over 108 pairs, which is chance.
+discriminate: cross-validated AUC is 0.570 over the 324-pair physics set, which
+is near chance. (An earlier revision of this line quoted 0.504 over 108
+geometry-only pairs; that is a different dataset, not a worse measurement of
+this one.)
 
 That is a data problem, not a model problem. **Three** of the six features are
 constant because the diagnostics feeding them are still stubs: ``n_tied`` never
@@ -51,7 +54,9 @@ contact with the real one: the map varies, and cross-validated AUC is 0.570.
 
 The signal that would work is still known. Accuracy splits **0.852 on anchored
 references against 0.000 on unanchored ones** (324-pair set), and an oracle
-anchored/unanchored indicator scores **AUC 0.924** on its own. No available
+anchored/unanchored indicator scores **AUC 0.935** on its own — for a binary
+indicator AUC equals balanced accuracy, and sensitivity 1.000 with specificity
+0.871 gives exactly that. No available
 diagnostic recovers that split, which is why the model stays at chance.
 
 So no fitted model ships. ``localize`` falls back to the conservative heuristic,
