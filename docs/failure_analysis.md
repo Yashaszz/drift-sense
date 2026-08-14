@@ -16,18 +16,24 @@ revisions of this document were measured on physics-free renders at 108 pairs;
 
 ---
 
+> **Revised 14 August, after R2's rotation estimator landed.** Every figure
+> below is re-measured with pose live. The previous revision reported anchored
+> 0.852 at 212 ms; those numbers described a pipeline that assumed nominal pose
+> and no longer exists. Sections 4 and 6 are marked where they still describe
+> the nominal-pose behaviour deliberately.
+
 ## Headline
 
 | stratum | n | plain NCC | full pipeline | median error (px) |
 |---|---|---|---|---|
-| **overall** | 324 | 0.377 | **0.426** | 111.7 |
-| anchored | 162 | 0.753 | **0.852** | **0.042** |
-| unanchored | 162 | 0.000 | **0.000** | 442.6 |
+| **overall** | 324 | 0.377 | **0.469** | 104.3 |
+| anchored | 162 | 0.753 | **0.938** | **0.035** |
+| unanchored | 162 | 0.000 | **0.000** | 487.6 |
 
 The overall figure is the less informative of the two. It averages a stratum the
 system solves to four hundredths of a pixel with one that is not solvable at all.
 
-Median end-to-end latency is **212 ms** (p95 215 ms), measured on
+Median end-to-end latency is **389 ms** (p95 422 ms), measured on
 macOS-26.5.2-arm64 — see `results/full_324.meta.json`, which now travels with
 every results CSV. Latency is a property of the machine: the same 324 pairs
 report 356 ms on R4's Windows laptop and the identical accuracy, and repeat runs
@@ -52,7 +58,7 @@ anchored case has no anchor in its reference. The stratum is built to contain no
 distinguishing feature.
 
 **The ceiling on this dataset is therefore 0.500.** Measured against that
-ceiling, the system is at **0.852 of what is achievable**.
+ceiling, the system is at **0.938 of what is achievable**.
 
 The correct response to an unsolvable case is to answer and flag, not to
 succeed. Every unanchored case escalates to the ambiguous tier, returns the
@@ -97,11 +103,21 @@ Two caveats to state whenever this table is shown:
 - **Pitch is a range, not a nominal.** `PITCH_TOLERANCE = 0.20` randomises it:
   FinFET 72–108 nm, DRAM 144–216 nm. No generated pair sits at 90 or 180.
 
-The measured architecture split is consistent but less dramatic than the MTF
-gap suggests: DRAM 0.444 against FinFET 0.407. Note the inversion in median
-error — FinFET 38.6 px against DRAM 122.5 px. FinFET fails *less badly* when it
-fails, because its intact gate lattice still constrains the answer to a coarse
-grid.
+**The measured split now runs the other way, and rotation estimation is why.**
+DRAM 0.444 against FinFET 0.494 overall, or 0.889 against 0.988 on the anchored
+stratum. Before pose estimation landed, FinFET was the harder family exactly as
+this MTF argument predicts. It is now the easier one: FinFET's coarse gate
+lattice, retaining 97–99% contrast, gives the spectral rotation estimator a
+strong unambiguous peak, and that gain outweighs the fine-fin attenuation the
+table describes. DRAM's single, finer periodicity gives the estimator less to
+lock onto.
+
+The median-error inversion survives and has the same cause — FinFET 56.1 px
+against DRAM 159.3 px. FinFET fails *less badly* when it fails, because its
+intact gate lattice still constrains the answer to a coarse grid.
+
+The MTF table above therefore explains *correlation contrast*, which is real,
+but it no longer predicts the accuracy ordering on its own. Say both.
 
 ---
 
@@ -113,17 +129,21 @@ disambiguation and should not be quoted as it.**
 
 | stratum | plain NCC | full pipeline | delta |
 |---|---|---|---|
-| ALL | 0.377 | 0.426 | +0.049 |
-| **pose = none** | 0.463 | 0.481 | **+0.019** |
-| pose = small | 0.398 | 0.463 | +0.065 |
-| pose = large | 0.269 | 0.333 | +0.065 |
+| ALL | 0.377 | 0.469 | +0.093 |
+| **pose = none** | 0.463 | 0.472 | **+0.009** |
+| pose = small | 0.398 | 0.472 | +0.074 |
+| pose = large | 0.269 | 0.463 | +0.194 |
 
 The baseline is handed nominal pose (θ = 0, s = 10). That is *correct* on the
 `pose-none` stratum and wrong on the other two, so most of the aggregate gap is
 the baseline's absence of pose estimation rather than anything disambiguation
 does. On the stratum where the baseline's pose is right, disambiguation is worth
-**+0.019**. That is the honest figure, and the per-stratum breakdown is what
-separates the two claims.
+**+0.009**. That is the honest figure for disambiguation, and the per-stratum
+breakdown is what separates the two claims.
+
+The gap widens with pose severity — +0.009, +0.074, +0.194 — which is now a
+direct readout of what rotation estimation contributes, since that is the only
+capability the baseline lacks on those strata.
 
 ### Stage ablation
 
@@ -136,7 +156,16 @@ weighting look inert when it is not.
 | `ncc` | 0.753 | 0.454 | 32 |
 | `+ weighting` | 0.833 | 0.456 | 159 |
 | `+ selection` | 0.833 | 0.456 | 162 |
-| `+ sub-pixel` (full) | **0.852** | **0.042** | 207 |
+| `+ sub-pixel` | 0.852 | 0.042 | 207 |
+| **`+ pose` (full system)** | **0.938** | **0.035** | 389 |
+
+> **The first four rows hold pose at nominal by construction.** `ablate.py`
+> resolves pose in `fast` mode (`ablate.py:70`) so that Stage 4 is isolated from
+> Stage 1; re-running it after rotation estimation landed returned byte-identical
+> stage figures, which is the expected result and a useful check that the
+> ablation measures what it claims. The final row is the real pipeline from
+> `results/full_324.csv`. Quote it as the system's accuracy; quote the others
+> only as deltas between each other.
 
 **Weighting is the entire disambiguation gain, +0.080.** Selection buys exactly
 0.000: with `TIE_SIGMA = 0.0` the tolerance is always zero, `n_tied` is always
@@ -159,8 +188,8 @@ carries little discriminative signal:
 
 | architecture | mean PSR | median PSR | success@1px |
 |---|---|---|---|
-| DRAM | 2.519 | 2.599 | 0.444 |
-| FinFET | 2.132 | 1.815 | 0.407 |
+| DRAM | 2.628 | 2.665 | 0.444 |
+| FinFET | 1.841 | 1.771 | 0.494 |
 
 The cause is structural rather than a coding error. PSR compares the winning
 peak against the surrounding surface, but on a periodic layout the sidelobe
@@ -224,6 +253,14 @@ field carries information as a confidence feature.
 Was truth in the candidate list at all, before disambiguation ran?
 (weighted, NMS radius 8.)
 
+> **Read this table at nominal pose.** `src/recall.py` resolves pose in `fast`
+> mode (`recall.py:31`), so every figure below is measured with θ = 0 — the same
+> convention as the stage ablation, and deliberately, so that candidate recall
+> is isolated from Stage 1. It is why end-to-end anchored accuracy (0.938) now
+> *exceeds* r@30 (0.852): the full pipeline estimates rotation and this harness
+> does not. The two are not measured on the same pipeline and must not be
+> subtracted from each other.
+
 | stratum | n | r@1 | r@5 | r@10 | r@30 |
 |---|---|---|---|---|---|
 | anchored | 162 | 0.833 | 0.840 | 0.846 | **0.852** |
@@ -240,10 +277,14 @@ Two conclusions:
 1. **Going from K=1 to K=30 buys +0.019 on anchored.** When the true peak is
    findable at all, it is essentially always rank 1. Deepening the candidate
    list is not where accuracy is hiding, and `--max-k 30` is generous already.
-2. **Recall@30 on anchored (0.852) equals end-to-end accuracy on anchored
-   (0.852).** Disambiguation is losing nothing that peak extraction found. The
-   remaining 24 anchored failures are cases where the true peak was never a
-   candidate — a Stage 1/3 problem, not a Stage 4 problem.
+2. **At nominal pose, recall@30 on anchored (0.852) equalled end-to-end
+   accuracy at nominal pose (0.852).** Disambiguation was losing nothing that
+   peak extraction found, and the 24 remaining anchored failures were cases
+   where the true peak was never a candidate — a Stage 1/3 problem, not a
+   Stage 4 problem. Rotation estimation has since addressed most of exactly
+   that: end-to-end anchored accuracy is now 0.938. Re-running this harness
+   with pose live would be the clean way to confirm the same identity holds at
+   the new operating point; it has not been done.
 
 ### NMS radius does not bite
 
@@ -294,15 +335,17 @@ scenes.
 
 | | count |
 |---|---|
-| correct in both | 133 |
-| correct only without noise | 1 |
-| correct only with noise | 5 |
-| wrong in both | 185 |
+| correct in both | 143 |
+| correct only without noise | 5 |
+| correct only with noise | 9 |
+| wrong in both | 167 |
 
-**318 of 324 pairs return the identical verdict.** Six are discordant, and they
-lean the wrong way — removing noise costs 4 net cases (anchored 0.827 clean
-against 0.852 noisy), which is not a causal effect but coin-flip variation among
-cases sitting on the 1 px threshold.
+**310 of 324 pairs return the identical verdict.** Fourteen are discordant, and
+they lean the wrong way — removing noise costs 4 net cases (anchored 0.914 clean
+against 0.938 noisy), which is not a causal effect but coin-flip variation among
+cases sitting on the 1 px threshold. The discordant count roughly doubled when
+rotation estimation landed, which is what you would expect: a more accurate
+system puts more pairs close enough to the threshold for a coin flip to matter.
 
 The correct claim is therefore: **at these strata, noise is not a driver of
 failure.** The unstated part, which must accompany it, is that this bounds the

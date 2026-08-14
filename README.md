@@ -85,7 +85,7 @@ The unanchored result is the honest one and not a defect. An unanchored
 reference is a periodic patch with no aperiodic feature in frame, so the
 correlation evidence does not identify a location — the generator asserts that
 such a layout carries an empty anchor list, which puts the ceiling on this
-dataset at 0.500 and the system at 0.852 of what is achievable. The true peak
+dataset at 0.500 and the system at 0.938 of what is achievable. The true peak
 is absent from the top 30 candidates in **160 of the 162** unanchored cases, so
 this is not a near miss. Every one of them escalates, returns the centre-prior
 answer and carries the low-confidence flag; **none returns a confident wrong
@@ -106,28 +106,40 @@ Three results from the 324-pair run that are not visible in the table above.
 
 - **The physics chain did not cost accuracy.** The comparison is against
   `dataset_control`, a paired noise-free control sharing every scene and seed
-  with the shipped set: anchored **0.827 clean against 0.852 with noise**, so
-  the noisy set scores marginally *higher*. Across noise strata anchored
-  accuracy is 83.3% / 83.3% / 88.9% for low / medium / high — high noise scored
-  highest. ZNCC is normalised, so the current noise magnitudes do not move it.
-  Worth stating deliberately rather than claiming noise robustness by accident.
-  (The comparison is *not* against the superseded 108-pair geometry-only set;
-  those figures are not comparable, per the note above.)
-- **Pose is the dominant degradation axis.** On the anchored stratum, **0.963 at
-  `pose=none` against 0.667 at `pose=large`** — all-pairs, the same split reads
-  48.1% against 33.3%. Rotation and scale estimation is not yet implemented, so
-  rotated pairs are matched at nominal pose.
-- **One stage dominates latency.** Scoring the reference's uniqueness map is
-  **60.6% of the call**. That share is the portable number — it holds on either
-  machine, where the absolute milliseconds do not; the same 324 pairs run about
-  1.7x slower on Windows 11 / AMD Zen 3 than on the Mac named above, with the
-  gap concentrated in FFT-heavy work. The map depends only on the reference, so
-  a repeat visit to the same site is served from cache; the figures above are
-  the cold cost, which is what a sweep over distinct references measures.
+  with the shipped set: anchored **0.914 clean against 0.938 with noise**, so
+  the noisy set scores marginally *higher*, and only 14 of 324 pairs disagree at
+  all. Across noise strata anchored accuracy is 90.7% / 94.4% / 96.3% for low /
+  medium / high — high noise scored highest. ZNCC is normalised, so the current
+  noise magnitudes do not move it. Worth stating deliberately rather than
+  claiming noise robustness by accident. (The comparison is *not* against the
+  superseded 108-pair geometry-only set; those figures are not comparable, per
+  the note above.)
+- **Pose was the dominant degradation axis, and no longer is.** Before rotation
+  estimation landed, anchored accuracy ran 0.963 at `pose=none` against 0.667 at
+  `pose=large`. With R2's Fourier–Mellin estimator it reads **0.944 / 0.944 /
+  0.926** across none / small / large — a 26-point gap closed to under two. Pose
+  estimation is worth **+0.086 anchored** on its own, the largest single gain in
+  the pipeline. Scale is still assumed nominal; only rotation is estimated.
+- **The architecture split inverted.** DRAM used to be the easier family (0.889
+  against FinFET's 0.815); it is now the harder one, **FinFET 0.988 against DRAM
+  0.889**. FinFET's regular gate lattice gives the spectral estimator a strong,
+  unambiguous rotation peak, and DRAM's finer pitch does not.
+- **Two stages dominate latency, and the ordering changed.** Scoring the
+  reference's uniqueness map used to be 60.6% of a 212 ms call. Pose estimation
+  now adds roughly 177 ms on top, so the same map is about a third of a 389 ms
+  call and pose is the largest single stage. Both are cold costs: the
+  uniqueness map depends only on the reference, so a repeat visit to the same
+  site is served from cache, and a sweep over distinct references — which is
+  what these figures measure — never benefits from it.
 
-Escalation is worth **+7.4 points on anchored references and +0.0 on
-unanchored** ones, which is why the unanchored stratum is answered and flagged
-rather than retried.
+  *(That split is derived from the two medians, not re-measured per stage. The
+  per-stage breakdown in `docs/r4_engineering_notes.md` predates pose and should
+  be re-run before anyone quotes a percentage.)*
+
+> **Pre-pose figures still to be re-measured:** the escalation benefit
+> (previously +7.4 points anchored), the per-stage latency table, and the
+> Windows/Mac 1.7x comparison were all measured before rotation estimation
+> landed. They are not quoted above for that reason.
 
 ## How it works
 

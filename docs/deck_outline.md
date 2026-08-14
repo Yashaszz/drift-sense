@@ -23,11 +23,12 @@ once in this repo.
 
 1. **Never quote a 108-set number.** That set was physics-free and is
    superseded. Anchored 77.8%, 105 ms and 0.01 px sub-pixel are all from it.
-2. **Never quote all-pairs accuracy without the anchored figure.** 0.426
-   averages a stratum we solve to 0.042 px with one that is unsolvable by
-   construction. Lead with anchored 0.852 and explain the ceiling.
-3. **Never quote a latency without its machine.** 212 ms is the Mac in
-   `results/full_324.meta.json`; the same pairs read ~1.7x slower on Windows.
+2. **Never quote all-pairs accuracy without the anchored figure.** 0.469
+   averages a stratum we solve to 0.035 px with one that is unsolvable by
+   construction. Lead with anchored 0.938 and explain the ceiling.
+3. **Never quote a latency without its machine.** 389 ms is the Mac in
+   `results/full_324.meta.json`. A Windows machine read ~1.7x slower, but that
+   comparison predates pose estimation and has not been re-measured.
 4. **Never say PSR is capped near 3.4.** 324-set maximum is 12.314.
 5. **Never claim our dimensions match a production node.** They are relaxed
    1.5–5x, for the contrast reason on slide 4. Say it before you are asked.
@@ -84,10 +85,19 @@ Ablation on the anchored stratum, n=162:
 | ZNCC only | 0.753 | 0.454 px |
 | + uniqueness weighting | 0.833 | 0.456 px |
 | + candidate selection | 0.833 | 0.456 px |
-| + sub-pixel | **0.852** | **0.042 px** |
+| + sub-pixel | 0.852 | 0.042 px |
+| **+ pose estimation** *(full system)* | **0.938** | **0.035 px** |
 
-Weighting is the entire disambiguation gain, +0.080. Sub-pixel buys an 11x
-error reduction.
+Two stages carry the system. **Uniqueness weighting is the entire
+disambiguation gain, +0.080**, and **pose estimation adds +0.086** — the largest
+single contribution. Sub-pixel buys an 11x error reduction; candidate selection
+buys exactly 0.000, because `TIE_SIGMA = 0.0` means exact ties never occur on
+this dataset, so the mandated tie-break is correct and never fires.
+
+> The first four rows are measured with pose held at nominal, by construction
+> (`ablate.py` resolves pose in `fast` mode), so that Stage 4 is isolated from
+> Stage 1. The final row is the real pipeline from `results/full_324.csv`.
+> Quote it as the system's accuracy; quote the others only as stage deltas.
 
 ## Slide 4 — Synthetic data: realism, diversity, reproducibility
 
@@ -119,41 +129,52 @@ and the **50% block**.
 
 | tolerance | plain NCC (all / anchored) | full pipeline (all / anchored) |
 |---|---|---|
-| ≤ 5 px | 0.423 / 0.846 | 0.460 / **0.920** |
-| ≤ 4 px | 0.417 / 0.833 | 0.454 / **0.907** |
-| ≤ 2 px | 0.398 / 0.796 | 0.438 / **0.877** |
-| ≤ 1 px | 0.377 / 0.753 | 0.426 / **0.852** |
+| ≤ 5 px | 0.423 / 0.846 | 0.472 / **0.944** |
+| ≤ 4 px | 0.417 / 0.833 | 0.472 / **0.944** |
+| ≤ 2 px | 0.398 / 0.796 | 0.472 / **0.944** |
+| ≤ 1 px | 0.377 / 0.753 | 0.469 / **0.938** |
 
-Median error 0.042 px anchored. Latency 212 ms median, 215 ms p95, on the Mac
+Median error 0.035 px anchored. Latency 389 ms median, 422 ms p95, on the Mac
 named in the metadata sidecar.
 
 **The unanchored zero is a ceiling, not a failure.** The generator asserts that
 an unanchored layout carries an empty anchor list, so the stratum is built to
-contain no distinguishing feature. The ceiling is 0.500 and we are at 0.852 of
+contain no distinguishing feature. The ceiling is 0.500 and we are at 0.938 of
 what is achievable. The true peak is absent from the top 30 candidates in 160
 of 162 unanchored cases — not a near miss, the information is not there. All
 162 escalate, answer with the mandated centre prior, and carry a low-confidence
 flag.
 
-> Speaker note: if a judge challenges the 0.426, this is the answer. Do not
+> Speaker note: if a judge challenges the 0.469, this is the answer. Do not
 > apologise for the zero; explain why a correct system must produce it.
 
 ## Slide 6 — Failure analysis and explainability
 
 Template slot 6 continued, the **10% block**, plus the RGB bonus.
 
-**We were confident about 2 of 324 cases, and one of those was wrong** —
-`finfet_anchored_pose-large_0226`, 2.28 px error at PSR 8.13 against an accept
-threshold of 8.0. The other 322 escalated and were flagged.
+**The system is confident about exactly 1 of 324 cases, and it is correct.**
+The other 323 escalate, answer, and carry a low-confidence flag. **Zero
+confident wrong answers.**
 
-That is why the thresholds are deliberately untuned. **PSR does not separate
-correct from incorrect on periodic layouts**, because the sidelobe region it
-normalises against contains genuine lattice peaks rather than noise. Lowering
-thresholds would buy speed by manufacturing confident wrong answers.
+That number used to be worse, and how it improved is the point. Before rotation
+estimation landed we were confident about 2 cases and **one of them was wrong**
+— `finfet_anchored_pose-large_0226`, 2.28 px error at PSR 8.13 against an accept
+threshold of 8.0. We put that failure in this deck rather than hide it. Pose
+estimation then fixed its cause: the same pair now lands at **0.098 px**, and
+its PSR fell to 1.81 so it would be flagged rather than accepted regardless.
 
-Where the remaining error lives, anchored: pose is dominant (0.963 at
-`pose=none` against 0.667 at `pose=large`), not noise — the high-noise stratum
-is the *most* accurate at 0.889.
+The thresholds stay deliberately untuned. **PSR does not separate correct from
+incorrect on periodic layouts**, because the sidelobe region it normalises
+against contains genuine lattice peaks rather than noise. Lowering thresholds
+would buy speed by manufacturing exactly the confident wrong answers we no
+longer have.
+
+Where the remaining error lives, anchored: **not pose, and not noise.** Pose is
+now nearly flat (0.944 / 0.944 / 0.926 across none / small / large) and the
+*high*-noise stratum is the most accurate at 0.963. The largest split left is
+architecture — **DRAM 0.889 against FinFET 0.988** — an inversion of the
+pre-pose ordering, because FinFET's regular gate lattice gives the spectral
+estimator a strong rotation peak and DRAM's finer pitch does not.
 
 **RGB bonus — a measured limit.** Visible light cannot resolve this layout:
 incoherent imaging passes nothing above `2·NA/λ`, so at NA 0.95 the finest
@@ -161,8 +182,9 @@ surviving period is 237 nm (blue) to 337 nm (red), against a 72–108 nm fin
 pitch. Measured, the best channel retains ~6% of the geometry's contrast. This
 is *why* the problem is posed with an SEM.
 
-> Speaker note: lead with the confident error before a judge finds it. A team
-> that reports its one bad answer is more credible on the other 323.
+> Speaker note: tell it in that order — we found our own confident error,
+> reported it, then removed its cause and verified the fix on the same pair.
+> That sequence is worth more than a clean number with no story behind it.
 
 ## Slide 7 — Technology, repository, video and references
 
