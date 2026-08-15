@@ -15,6 +15,12 @@ dependencies = [
     "scikit-image>=0.22",
     "scikit-learn>=1.4",
     "pillow>=10.0",
+    # Figure rendering for the deck. Five scripts under scripts/ import it and
+    # they ship in the archive, but it was undeclared until now, so those
+    # scripts only ran on the one machine that happened to have it installed.
+    # Declared at runtime rather than as a dev extra because that is where main
+    # placed it; note that nothing under src/ imports matplotlib, so the
+    # deliverable itself does not need it.
     "matplotlib>=3.11.1",
 ]
 
