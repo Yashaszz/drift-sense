@@ -456,6 +456,14 @@ def build_dataset(
     tuple
         ``(records, elapsed_seconds, ground_truth_path)``.
     """
+    # Stamp the tree first, before a single file is touched. `ground_truth.jsonl`
+    # is tracked for every dataset that keeps its provenance, so the clearing
+    # step below deletes a tracked file and the run dirties the very tree it is
+    # about to describe. Reading the stamp any later reports the tool's own side
+    # effect as a property of the checkout -- which is how main's dataset_control
+    # came to carry `c57d1e5-dirty` from an otherwise clean run.
+    generator_commit = _generator_commit()
+
     # Clear before writing. Leaving old files behind silently mixes runs: a
     # smaller --seeds-per-cell overwrites the pairs it regenerates and orphans
     # the rest, so the folder ends up holding two datasets at once and its
@@ -575,6 +583,7 @@ def build_dataset(
         supersample=supersample,
         noise_levels=levels,
         pose_conditions=poses,
+        generator_commit=generator_commit,
     )
     return records, time.perf_counter() - started, gt_path
 
@@ -717,6 +726,7 @@ def write_manifest(
     supersample: int,
     noise_levels: Sequence[str] | None = None,
     pose_conditions: Sequence[str] | None = None,
+    generator_commit: str | None = None,
 ) -> Path:
     """Write ``dataset_manifest.json`` describing this dataset.
 
@@ -736,6 +746,10 @@ def write_manifest(
         Anti-aliasing factor used.
     pose_conditions
         Pose strata generated; defaults to :data:`DEFAULT_POSE_CONDITIONS`.
+    generator_commit
+        Stamp for the code that produced the data. :func:`build_dataset` passes
+        the one it captured *before* writing, since generating dirties the tree.
+        Defaults to reading it now, which is right for a direct caller.
 
     Returns
     -------
@@ -767,7 +781,9 @@ def write_manifest(
         "image_count": len(records) * 2,
         "image_tree_sha256": image_tree_hash(output_dir),
         "file_tree_sha256": file_tree_hash(output_dir),
-        "generator_commit": _generator_commit(),
+        "generator_commit": (
+            generator_commit if generator_commit is not None else _generator_commit()
+        ),
         "generation": {
             "seeds_per_cell": seeds_per_cell,
             "seed": base_seed,

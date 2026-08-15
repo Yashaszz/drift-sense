@@ -13,6 +13,7 @@ import pytest
 
 from src import config
 from src.generate_dataset import (
+    DEFAULT_POSE_CONDITIONS,
     DRAM_RANGES,
     EXTENT_NM,
     FINFET_RANGES,
@@ -371,6 +372,24 @@ def test_pose_baseline_matches_the_brief():
     (large_rot_lo, large_rot_hi), _ = POSE_RANGES["large"]
     assert large_rot_hi > small_rot_hi
     assert large_rot_lo < small_rot_lo
+
+
+def test_adding_a_pose_stratum_cannot_change_the_shipped_set():
+    """New entries in ``POSE_RANGES`` must not reach the default stratification.
+
+    ``stress`` was added to cover the spec's 9:1-11:1 band. The shipped 324-pair
+    set has to keep generating bit-identically across that change, and the cell
+    product is what fixes both the pair count and the seed sequence -- a stratum
+    leaking into the default would renumber every pair in it.
+
+    Pinned to the invariant rather than to the current membership, so the next
+    stratum anyone adds is caught by this same test.
+    """
+    assert DEFAULT_POSE_CONDITIONS == ("none", "small", "large")
+    assert set(DEFAULT_POSE_CONDITIONS) <= set(POSE_RANGES)
+    assert "stress" not in DEFAULT_POSE_CONDITIONS
+    assert expected_pair_count(9) == 2 * 2 * len(DEFAULT_POSE_CONDITIONS) * len(NOISE_LEVELS) * 9
+    assert expected_pair_count(9) == 324
 
 
 def test_noise_strata_are_not_faked():
