@@ -15,6 +15,7 @@ dependencies = [
     "scikit-image>=0.22",
     "scikit-learn>=1.4",
     "pillow>=10.0",
+    "matplotlib>=3.11.1",
 ]
 
 [project.optional-dependencies]
@@ -93,4 +94,5 @@ addopts = "-q --strict-markers"
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.1",
+    "pytest>=9.1.1",
 ]
