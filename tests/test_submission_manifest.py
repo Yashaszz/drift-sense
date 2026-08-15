@@ -182,3 +182,45 @@ def test_an_absolute_dataset_path_never_reaches_the_manifest(
     for row in _read(out):
         assert not Path(row["reference_path"]).is_absolute(), row["reference_path"]
         assert not Path(row["search_path"]).is_absolute(), row["search_path"]
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_tracked_manifest_matches_the_tracked_results():
+    """The shipped deliverable must quote the predictions the repo ships.
+
+    This file is downstream of ``results/full_324.csv`` and nothing regenerates
+    it when that changes, so it goes stale silently. It already did once: it was
+    built the morning Stage 1 landed and merged after the 324-pair results were
+    regenerated against pose, leaving 232 of 324 rows carrying pre-pose
+    predictions. The manifest implied anchored accuracy of 0.852 while the
+    README, the deck and the failure analysis all said 0.938 -- a contradiction
+    a grader finds by joining the one CSV they are handed against our headline.
+
+    Reads only tracked CSVs, never the dataset, so it runs on a clean checkout.
+    Regenerate with::
+
+        python -m scripts.build_submission_manifest --dataset dataset \\
+            --results results/full_324.csv --out results/submission_manifest.csv
+    """
+    manifest_path = _REPO_ROOT / "results" / "submission_manifest.csv"
+    results_path = _REPO_ROOT / "results" / "full_324.csv"
+    assert manifest_path.exists(), f"deliverable 6 is missing: {manifest_path}"
+    assert results_path.exists(), f"canonical results are missing: {results_path}"
+
+    predictions = {row["case_id"]: row for row in _read(results_path)}
+    stale = [
+        row["pair_id"]
+        for row in _read(manifest_path)
+        if row["pair_id"] in predictions
+        and (
+            row["pred_x"] != predictions[row["pair_id"]]["pred_x"]
+            or row["pred_y"] != predictions[row["pair_id"]]["pred_y"]
+        )
+    ]
+
+    assert not stale, (
+        f"{len(stale)} of {len(predictions)} rows disagree with results/full_324.csv; "
+        f"rebuild the manifest (first: {stale[:3]})"
+    )
