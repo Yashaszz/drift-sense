@@ -1,0 +1,12 @@
+{
+  "generated_utc": "2026-08-15T03:50:19+00:00",
+  "commit": "23c8152",
+  "cases": 48,
+  "dataset": "dataset_scale_stress",
+  "mode": "auto",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
+  "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+  "python": "3.12.13",
+  "numpy": "2.5.1"
+}

@@ -299,3 +299,11 @@ dataset_control/*
 dataset_full/*
 !dataset_full/dataset_manifest.json
 !dataset_full/ground_truth.jsonl
+
+# dataset_scale_stress answers section 4A's 9:1-11:1 robustness range, which the
+# shipped strata do not reach. Same treatment as the other two -- images out,
+# provenance in -- because docs/scale_robustness.md quotes numbers measured on
+# it, and a results file with no manifest to point at is an unsourced claim.
+dataset_scale_stress/*
+!dataset_scale_stress/dataset_manifest.json
+!dataset_scale_stress/ground_truth.jsonl
