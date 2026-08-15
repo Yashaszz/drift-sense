@@ -6,7 +6,7 @@ readings of a genuinely underdetermined problem.
 All numbers come from `results/full_324.csv` and `results/baseline_324.csv`
 over **324 stratified pairs** (2 architectures x 2 anchor states x 3 pose
 conditions x 3 noise strata x 9 seeds), 1 px success tolerance. Reproduction
-commands in section 8.
+commands in section 9.
 
 **These renders carry real SEM physics.** R2's `apply_sem_chain` is no longer an
 identity passthrough — the noise strata modify Poisson shot noise and read
@@ -16,18 +16,24 @@ revisions of this document were measured on physics-free renders at 108 pairs;
 
 ---
 
+> **Revised 14 August, after R2's rotation estimator landed.** Every figure
+> below is re-measured with pose live. The previous revision reported anchored
+> 0.852 at 212 ms; those numbers described a pipeline that assumed nominal pose
+> and no longer exists. Sections 4 and 6 are marked where they still describe
+> the nominal-pose behaviour deliberately.
+
 ## Headline
 
 | stratum | n | plain NCC | full pipeline | median error (px) |
 |---|---|---|---|---|
-| **overall** | 324 | 0.377 | **0.426** | 111.7 |
-| anchored | 162 | 0.753 | **0.852** | **0.042** |
-| unanchored | 162 | 0.000 | **0.000** | 442.6 |
+| **overall** | 324 | 0.377 | **0.469** | 104.3 |
+| anchored | 162 | 0.753 | **0.938** | **0.035** |
+| unanchored | 162 | 0.000 | **0.000** | 487.6 |
 
 The overall figure is the less informative of the two. It averages a stratum the
 system solves to four hundredths of a pixel with one that is not solvable at all.
 
-Median end-to-end latency is **212 ms** (p95 215 ms), measured on
+Median end-to-end latency is **389 ms** (p95 422 ms), measured on
 macOS-26.5.2-arm64 — see `results/full_324.meta.json`, which now travels with
 every results CSV. Latency is a property of the machine: the same 324 pairs
 report 356 ms on R4's Windows laptop and the identical accuracy, and repeat runs
@@ -52,7 +58,7 @@ anchored case has no anchor in its reference. The stratum is built to contain no
 distinguishing feature.
 
 **The ceiling on this dataset is therefore 0.500.** Measured against that
-ceiling, the system is at **0.852 of what is achievable**.
+ceiling, the system is at **0.938 of what is achievable**.
 
 The correct response to an unsolvable case is to answer and flag, not to
 succeed. Every unanchored case escalates to the ambiguous tier, returns the
@@ -97,11 +103,21 @@ Two caveats to state whenever this table is shown:
 - **Pitch is a range, not a nominal.** `PITCH_TOLERANCE = 0.20` randomises it:
   FinFET 72–108 nm, DRAM 144–216 nm. No generated pair sits at 90 or 180.
 
-The measured architecture split is consistent but less dramatic than the MTF
-gap suggests: DRAM 0.444 against FinFET 0.407. Note the inversion in median
-error — FinFET 38.6 px against DRAM 122.5 px. FinFET fails *less badly* when it
-fails, because its intact gate lattice still constrains the answer to a coarse
-grid.
+**The measured split now runs the other way, and rotation estimation is why.**
+DRAM 0.444 against FinFET 0.494 overall, or 0.889 against 0.988 on the anchored
+stratum. Before pose estimation landed, FinFET was the harder family exactly as
+this MTF argument predicts. It is now the easier one: FinFET's coarse gate
+lattice, retaining 97–99% contrast, gives the spectral rotation estimator a
+strong unambiguous peak, and that gain outweighs the fine-fin attenuation the
+table describes. DRAM's single, finer periodicity gives the estimator less to
+lock onto.
+
+The median-error inversion survives and has the same cause — FinFET 56.1 px
+against DRAM 159.3 px. FinFET fails *less badly* when it fails, because its
+intact gate lattice still constrains the answer to a coarse grid.
+
+The MTF table above therefore explains *correlation contrast*, which is real,
+but it no longer predicts the accuracy ordering on its own. Say both.
 
 ---
 
@@ -113,17 +129,21 @@ disambiguation and should not be quoted as it.**
 
 | stratum | plain NCC | full pipeline | delta |
 |---|---|---|---|
-| ALL | 0.377 | 0.426 | +0.049 |
-| **pose = none** | 0.463 | 0.481 | **+0.019** |
-| pose = small | 0.398 | 0.463 | +0.065 |
-| pose = large | 0.269 | 0.333 | +0.065 |
+| ALL | 0.377 | 0.469 | +0.093 |
+| **pose = none** | 0.463 | 0.472 | **+0.009** |
+| pose = small | 0.398 | 0.472 | +0.074 |
+| pose = large | 0.269 | 0.463 | +0.194 |
 
 The baseline is handed nominal pose (θ = 0, s = 10). That is *correct* on the
 `pose-none` stratum and wrong on the other two, so most of the aggregate gap is
 the baseline's absence of pose estimation rather than anything disambiguation
 does. On the stratum where the baseline's pose is right, disambiguation is worth
-**+0.019**. That is the honest figure, and the per-stratum breakdown is what
-separates the two claims.
+**+0.009**. That is the honest figure for disambiguation, and the per-stratum
+breakdown is what separates the two claims.
+
+The gap widens with pose severity — +0.009, +0.074, +0.194 — which is now a
+direct readout of what rotation estimation contributes, since that is the only
+capability the baseline lacks on those strata.
 
 ### Stage ablation
 
@@ -136,7 +156,16 @@ weighting look inert when it is not.
 | `ncc` | 0.753 | 0.454 | 32 |
 | `+ weighting` | 0.833 | 0.456 | 159 |
 | `+ selection` | 0.833 | 0.456 | 162 |
-| `+ sub-pixel` (full) | **0.852** | **0.042** | 207 |
+| `+ sub-pixel` | 0.852 | 0.042 | 207 |
+| **`+ pose` (full system)** | **0.938** | **0.035** | 389 |
+
+> **The first four rows hold pose at nominal by construction.** `ablate.py`
+> resolves pose in `fast` mode (`ablate.py:70`) so that Stage 4 is isolated from
+> Stage 1; re-running it after rotation estimation landed returned byte-identical
+> stage figures, which is the expected result and a useful check that the
+> ablation measures what it claims. The final row is the real pipeline from
+> `results/full_324.csv`. Quote it as the system's accuracy; quote the others
+> only as deltas between each other.
 
 **Weighting is the entire disambiguation gain, +0.080.** Selection buys exactly
 0.000: with `TIE_SIGMA = 0.0` the tolerance is always zero, `n_tied` is always
@@ -159,8 +188,8 @@ carries little discriminative signal:
 
 | architecture | mean PSR | median PSR | success@1px |
 |---|---|---|---|
-| DRAM | 2.519 | 2.599 | 0.444 |
-| FinFET | 2.132 | 1.815 | 0.407 |
+| DRAM | 2.628 | 2.665 | 0.444 |
+| FinFET | 1.841 | 1.771 | 0.494 |
 
 The cause is structural rather than a coding error. PSR compares the winning
 peak against the surrounding surface, but on a periodic layout the sidelobe
@@ -170,15 +199,21 @@ standard deviation and compresses PSR toward the same value regardless of
 correctness.
 
 **Consequence:** with accept thresholds at 8.0 (fast) and 4.0 (robust),
-**320 of 324 cases escalate** to the ambiguous tier — 3 accept at `robust`, 1 at
-`fast`. Slow, but almost never falsely confident. The thresholds are
-deliberately untuned: lowering them to buy speed would buy it by making wrong
-answers confident.
+**323 of 324 cases escalate** to the ambiguous tier on the development set —
+one accepts at `fast`, and it is correct. Slow, but almost never falsely
+confident.
+
+**On the holdout, that "almost" is the whole story.** Two cases clear the
+threshold there and **both are wrong** — see section 8. The thresholds stay
+deliberately untuned: lowering them to buy speed would buy it by making more
+wrong answers confident, and unseen data has now shown that the ones which do
+get through are wrong more often than not.
 
 > **Do not state that PSR is capped near 3.4.** That figure comes from the
-> superseded 108 set. On 324 the observed maximum is **12.314**, with 2 cases
-> at or above 8.0 and 4 at or above 4.0. The "everything escalates" conclusion
-> survives at 98.8%, but the 3.4 ceiling is falsifiable by opening the CSV.
+> superseded 108 set. On the development set the observed maximum is **12.314**
+> with 1 case at or above 8.0; on the holdout it reaches **14.966** with 2. The
+> "everything escalates" conclusion survives at 99.7% and 99.4% respectively,
+> but the 3.4 ceiling is falsifiable by opening either CSV.
 
 One measurement bug was found and fixed in an earlier pass: sidelobe statistics
 excluded a **Euclidean disc** around the peak while peak extraction suppresses
@@ -224,6 +259,14 @@ field carries information as a confidence feature.
 Was truth in the candidate list at all, before disambiguation ran?
 (weighted, NMS radius 8.)
 
+> **Read this table at nominal pose.** `src/recall.py` resolves pose in `fast`
+> mode (`recall.py:31`), so every figure below is measured with θ = 0 — the same
+> convention as the stage ablation, and deliberately, so that candidate recall
+> is isolated from Stage 1. It is why end-to-end anchored accuracy (0.938) now
+> *exceeds* r@30 (0.852): the full pipeline estimates rotation and this harness
+> does not. The two are not measured on the same pipeline and must not be
+> subtracted from each other.
+
 | stratum | n | r@1 | r@5 | r@10 | r@30 |
 |---|---|---|---|---|---|
 | anchored | 162 | 0.833 | 0.840 | 0.846 | **0.852** |
@@ -240,10 +283,14 @@ Two conclusions:
 1. **Going from K=1 to K=30 buys +0.019 on anchored.** When the true peak is
    findable at all, it is essentially always rank 1. Deepening the candidate
    list is not where accuracy is hiding, and `--max-k 30` is generous already.
-2. **Recall@30 on anchored (0.852) equals end-to-end accuracy on anchored
-   (0.852).** Disambiguation is losing nothing that peak extraction found. The
-   remaining 24 anchored failures are cases where the true peak was never a
-   candidate — a Stage 1/3 problem, not a Stage 4 problem.
+2. **At nominal pose, recall@30 on anchored (0.852) equalled end-to-end
+   accuracy at nominal pose (0.852).** Disambiguation was losing nothing that
+   peak extraction found, and the 24 remaining anchored failures were cases
+   where the true peak was never a candidate — a Stage 1/3 problem, not a
+   Stage 4 problem. Rotation estimation has since addressed most of exactly
+   that: end-to-end anchored accuracy is now 0.938. Re-running this harness
+   with pose live would be the clean way to confirm the same identity holds at
+   the new operating point; it has not been done.
 
 ### NMS radius does not bite
 
@@ -294,15 +341,17 @@ scenes.
 
 | | count |
 |---|---|
-| correct in both | 133 |
-| correct only without noise | 1 |
-| correct only with noise | 5 |
-| wrong in both | 185 |
+| correct in both | 143 |
+| correct only without noise | 5 |
+| correct only with noise | 9 |
+| wrong in both | 167 |
 
-**318 of 324 pairs return the identical verdict.** Six are discordant, and they
-lean the wrong way — removing noise costs 4 net cases (anchored 0.827 clean
-against 0.852 noisy), which is not a causal effect but coin-flip variation among
-cases sitting on the 1 px threshold.
+**310 of 324 pairs return the identical verdict.** Fourteen are discordant, and
+they lean the wrong way — removing noise costs 4 net cases (anchored 0.914 clean
+against 0.938 noisy), which is not a causal effect but coin-flip variation among
+cases sitting on the 1 px threshold. The discordant count roughly doubled when
+rotation estimation landed, which is what you would expect: a more accurate
+system puts more pairs close enough to the threshold for a coin flip to matter.
 
 The correct claim is therefore: **at these strata, noise is not a driver of
 failure.** The unstated part, which must accompany it, is that this bounds the
@@ -318,14 +367,90 @@ detected breakdown.
 
 ---
 
-## 8. How to reproduce
+## 8. The holdout: what survived contact with unseen data
+
+Everything above is measured on `dataset/`, which is also the set the system was
+developed against. `dataset_holdout` is 324 pairs on seed 389722107, disjoint
+from that set, with its image and file tree hashes **pre-registered before
+generation** and reproduced byte-for-byte across a Windows and a Mac run. It was
+scored **once**, after all development stopped, and never used to make a
+decision.
+
+### Accuracy generalised
+
+| metric, anchored (n=162) | development | holdout | delta |
+|---|---|---|---|
+| success @ 1 px | 0.938 | **0.951** | +0.012 |
+| success @ 2 px | 0.944 | 0.963 | +0.019 |
+| success @ 4 px | 0.944 | 0.975 | +0.031 |
+| success @ 5 px | 0.944 | 0.975 | +0.031 |
+| median error | 0.035 px | 0.031 px | −0.004 |
+| median latency | 389 ms | 382 ms | −7 ms |
+
+All-pairs accuracy is 0.469 against 0.475. No stratum moves by more than a
+handful of cases, and the two that move most — DRAM +0.049, FinFET −0.025 — sit
+well inside what n=81 supports. **Nothing in the accuracy story was overfit.**
+
+### Calibration did not
+
+This is the finding the holdout was for.
+
+| | development | holdout |
+|---|---|---|
+| cases accepted without a low-confidence flag | 1 | 2 |
+| of those, wrong | **0** | **2** |
+
+| case | error | PSR | confidence |
+|---|---|---|---|
+| `finfet_anchored_pose-small_0201` | 1.49 px | 11.83 | 0.871 |
+| `finfet_anchored_pose-large_0236` | 1.66 px | 14.97 | 0.970 |
+
+Both clear the 8.0 accept threshold with room to spare. Both are FinFET, whose
+coarse gate lattice produces genuine, strong sidelobes that PSR reads as a clean
+isolated peak — the exact structural failure described in section 4, now
+demonstrated on data the system had never seen.
+
+On the development set the system was confident once and was right, which
+invites the claim *"zero confident wrong answers."* **That claim does not
+survive the holdout and must not be made.** The defensible statement is:
+
+> Accuracy generalises. Calibration does not. PSR is a detection statistic, and
+> on periodic layouts it cannot distinguish a correct peak from a confident one
+> — which is why the thresholds are untuned and why every answer ships with a
+> flag rather than a bare number.
+
+### The tolerance caveat, stated rather than exploited
+
+Both confident errors are **under 1.7 px**. At the problem statement's 2 px
+tolerance they score as passes and the confident-error count reads zero again.
+The failure is real at 1 px and disappears at 2 px.
+
+That is worth saying out loud, because reporting only the tolerance that
+flatters the system is the same error as quoting a 108-set number: defensible
+in isolation, indefensible once someone opens the CSV.
+
+### What this licenses us to claim
+
+- **Do** claim 0.951 anchored on 324 unseen pairs from a pre-registered seed.
+- **Do** claim the accuracy is not overfit, and show both columns.
+- **Do not** claim the system never answers confidently and wrongly.
+- **Do** claim we tested that assertion deliberately and reported it failing.
+
+---
+
+## 9. How to reproduce
 
 ```bash
 uv run python -m src.evaluate     --data dataset --gt dataset/ground_truth.jsonl --out results/full_324.csv
 uv run python -m src.baseline_ncc --data dataset --gt dataset/ground_truth.jsonl --out results/baseline_324.csv
 uv run python -m src.ablate       --data dataset --gt dataset/ground_truth.jsonl --out results/ablation_324.csv
 uv run python -m src.recall       --data dataset --gt dataset/ground_truth.jsonl --out results/recall_324.csv --max-k 30
+uv run python -m src.evaluate     --data dataset_control --out results/control_324.csv
+uv run python -m src.evaluate     --data dataset_holdout --out results/holdout_324.csv
 ```
+
+The holdout line is deliberately last. It was run **once**, after development
+stopped; re-running it during tuning is how a holdout stops being one.
 
 Pass `--gt` explicitly. A silently wrong ground-truth path poisons every number
 in this document.

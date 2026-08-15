@@ -40,6 +40,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from src import config
 from src.localize import localize
 from src.types import Mode
 
@@ -317,6 +318,49 @@ def summarise(rows: list[dict[str, Any]], group_by: str) -> list[tuple[Any, ...]
     return out
 
 
+def pass_rates(rows: list[dict[str, Any]]) -> list[tuple[float, float, float]]:
+    """Return the pass rate at every tolerance the problem statement requires.
+
+    Parameters
+    ----------
+    rows
+        Result rows, each carrying ``err_px`` and ``anchored``.
+
+    Returns
+    -------
+    list of tuple
+        ``(tolerance_px, all_pairs_rate, anchored_rate)`` per entry in
+        :data:`src.config.TOLERANCES_PX`, strictest first.
+
+    Notes
+    -----
+    Derived from ``err_px`` rather than from a per-tolerance success column, so
+    the whole table is available from any results CSV ever written, including
+    ones produced before the tolerances were corrected. Non-finite errors are
+    failures at every tolerance: a degraded answer is not a near miss.
+    """
+    anchored = [r for r in rows if r["anchored"] == "anchored"]
+
+    def rate(subset: list[dict[str, Any]], tol: float) -> float:
+        if not subset:
+            return float("nan")
+        hits = sum(
+            1 for r in subset if math.isfinite(float(r["err_px"])) and float(r["err_px"]) <= tol
+        )
+        return hits / len(subset)
+
+    return [(tol, rate(rows, tol), rate(anchored, tol)) for tol in config.TOLERANCES_PX]
+
+
+def print_pass_rates(rows: list[dict[str, Any]]) -> None:
+    """Print the pass-rate table the submission checklist asks for."""
+    print("\nPass rates (problem-statement tolerances)")
+    print(f"{'tolerance':<12}{'all pairs':>12}{'anchored':>12}")
+    print("-" * 36)
+    for tol, overall, anchored in pass_rates(rows):
+        print(f"<= {tol:<9.0f}{overall:>12.3f}{anchored:>12.3f}")
+
+
 def print_table(title: str, rows: list[tuple[Any, ...]]) -> None:
     """Print a titled table of per-stratum metrics."""
     print(f"\n{title}")
@@ -478,6 +522,7 @@ def main() -> None:
 
     overall = sum(int(r["success_1px"]) for r in scored) / len(scored)
     print(f"\nOVERALL success@1px: {overall:.3f}  ({len(scored)} cases)")
+    print_pass_rates(scored)
     for column in ("arch", "anchored", "pose", "noise"):
         if any(r[column] not in ("", None) for r in scored):
             print_table(f"By {column}", summarise(scored, column))

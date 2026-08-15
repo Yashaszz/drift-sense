@@ -1,8 +1,8 @@
 {
-  "generated_utc": "2026-08-14T16:26:39+00:00",
-  "commit": "911afd9",
+  "generated_utc": "2026-08-14T16:50:58+00:00",
+  "commit": "109d3ee",
   "cases": 324,
-  "dataset": "dataset",
+  "dataset": "dataset_holdout",
   "mode": "auto",
   "platform": "macOS-26.5.2-arm64-arm-64bit",
   "machine": "arm64",

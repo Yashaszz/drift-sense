@@ -60,9 +60,18 @@ noise, varied across three strata.
 | accuracy, unanchored references (n=162) | 0.000 | 0.000 |
 | accuracy, all pairs (n=324) | 0.377 | 0.469 |
 | median error, anchored | 0.454 px | **0.035 px** |
-| latency, median / p95 | | 725 ms / 1281 ms |
+| latency, median / p95 | | 389 ms / 422 ms |
 
-Latency is a property of the machine, not of the code: Windows-11-10.0.26200-SP0 · Python 3.12.13 · commit `257cbcd`. The same 324 pairs on a different machine will report a different figure and the same accuracy.
+Pass rates at the tolerances the problem statement asks for (5, 4, 2 and 1 px):
+
+| tolerance | plain NCC (all / anchored) | full pipeline (all / anchored) |
+|---|---|---|
+| ≤ 5 px | 0.423 / 0.846 | 0.472 / **0.944** |
+| ≤ 4 px | 0.417 / 0.833 | 0.472 / **0.944** |
+| ≤ 2 px | 0.398 / 0.796 | 0.472 / **0.944** |
+| ≤ 1 px | 0.377 / 0.753 | 0.469 / **0.938** |
+
+Latency is a property of the machine, not of the code: macOS-26.5.2-arm64-arm-64bit · Python 3.12.13 · commit `911afd9`. The same 324 pairs on a different machine will report a different figure and the same accuracy.
 
 Regenerate with `uv run python -m src.evaluate --data dataset --out results/full_324.csv`, then `uv run python -m scripts.render_results --write`.
 
@@ -95,38 +104,42 @@ simulated physics are literature-backed and which are declared assumptions.
 
 Three results from the 324-pair run that are not visible in the table above.
 
-- **Pose estimation closed the largest gap in the system.** Before Stage 1
-  landed, anchored accuracy fell from 0.963 at `pose=none` to **0.667** at
-  `pose=large` — a 0.296 collapse, and the single worst stratum. It now reads
-  0.944 / 0.944 / **0.926** across none / small / large: the gap is 0.018, and
-  rotated pairs are no longer meaningfully harder than unrotated ones. That is
-  where the headline `0.852 → 0.938` came from.
-- **Rotation is estimated; scale is not.** `theta_est` is live and varies over
-  ±8.4° on 239 of 324 pairs. `scale_est` is exactly 10.0 on **all 324**, so the
-  scale residual is still pinned at nominal and `scale_residual` remains a dead
-  confidence feature. The dataset does carry scale mismatch, so this is
-  headroom rather than a defect.
-- **The physics chain did not cost accuracy.** Across noise strata anchored
-  accuracy is **90.7% / 94.4% / 96.3%** for low / medium / high — accuracy rises
-  with noise. ZNCC is normalised, so the current noise magnitudes do not move
-  it, and what little ordering there is runs the wrong way to be a noise effect.
-  Worth stating deliberately rather than claiming noise robustness by accident.
-  (`results/control_324.csv`, the paired noise-free control, has not yet been
-  re-run against Stage 1, so the clean-versus-noisy comparison it supported is
-  withheld rather than quoted stale.)
-- **One stage dominates latency.** Scoring the reference's uniqueness map is
-  **60.6% of the call**. That share is the portable number — it holds on either
-  machine, where the absolute milliseconds do not; the same 324 pairs run about
-  1.7x slower on the Windows 11 / AMD Zen 3 box stamped above than on the Apple
-  Silicon Mac that produced the previously published figures, with the gap
-  concentrated in FFT-heavy work. The map depends only on the reference, so
-  a repeat visit to the same site is served from cache; the figures above are
-  the cold cost, which is what a sweep over distinct references measures.
+- **The physics chain did not cost accuracy.** The comparison is against
+  `dataset_control`, a paired noise-free control sharing every scene and seed
+  with the shipped set: anchored **0.914 clean against 0.938 with noise**, so
+  the noisy set scores marginally *higher*, and only 14 of 324 pairs disagree at
+  all. Across noise strata anchored accuracy is 90.7% / 94.4% / 96.3% for low /
+  medium / high — high noise scored highest. ZNCC is normalised, so the current
+  noise magnitudes do not move it. Worth stating deliberately rather than
+  claiming noise robustness by accident. (The comparison is *not* against the
+  superseded 108-pair geometry-only set; those figures are not comparable, per
+  the note above.)
+- **Pose was the dominant degradation axis, and no longer is.** Before rotation
+  estimation landed, anchored accuracy ran 0.963 at `pose=none` against 0.667 at
+  `pose=large`. With R2's Fourier–Mellin estimator it reads **0.944 / 0.944 /
+  0.926** across none / small / large — a 26-point gap closed to under two. Pose
+  estimation is worth **+0.086 anchored** on its own, the largest single gain in
+  the pipeline. Scale is still assumed nominal; only rotation is estimated.
+- **The architecture split inverted.** DRAM used to be the easier family (0.889
+  against FinFET's 0.815); it is now the harder one, **FinFET 0.988 against DRAM
+  0.889**. FinFET's regular gate lattice gives the spectral estimator a strong,
+  unambiguous rotation peak, and DRAM's finer pitch does not.
+- **Two stages dominate latency, and the ordering changed.** Scoring the
+  reference's uniqueness map used to be 60.6% of a 212 ms call. Pose estimation
+  now adds roughly 177 ms on top, so the same map is about a third of a 389 ms
+  call and pose is the largest single stage. Both are cold costs: the
+  uniqueness map depends only on the reference, so a repeat visit to the same
+  site is served from cache, and a sweep over distinct references — which is
+  what these figures measure — never benefits from it.
 
-Escalation remains worth nothing on the unanchored stratum — no amount of
-compute recovers an answer the evidence does not contain — which is why those
-cases are answered and flagged rather than retried. The anchored-side figure
-was measured before Stage 1 landed and is not requoted here.
+  *(That split is derived from the two medians, not re-measured per stage. The
+  per-stage breakdown in `docs/r4_engineering_notes.md` predates pose and should
+  be re-run before anyone quotes a percentage.)*
+
+> **Pre-pose figures still to be re-measured:** the escalation benefit
+> (previously +7.4 points anchored), the per-stage latency table, and the
+> Windows/Mac 1.7x comparison were all measured before rotation estimation
+> landed. They are not quoted above for that reason.
 
 ## How it works
 
@@ -153,7 +166,7 @@ behind them, and `benchmarks/README.md` to reproduce every number.
 
 ```
 src/          pipeline modules; localize.py is the deliverable
-tests/        586 tests
+tests/        576 tests
 benchmarks/   reproducible timing, accuracy and calibration reports
 results/      tracked CSV evidence behind every number in this file
 docs/         failure analysis, citations, engineering notes and handoff
