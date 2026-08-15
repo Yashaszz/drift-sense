@@ -56,13 +56,13 @@ noise, varied across three strata.
 
 | | plain NCC | full pipeline |
 |---|---|---|
-| accuracy, **anchored** references (n=162) | 0.753 | **0.852** |
+| accuracy, **anchored** references (n=162) | 0.753 | **0.938** |
 | accuracy, unanchored references (n=162) | 0.000 | 0.000 |
-| accuracy, all pairs (n=324) | 0.377 | 0.426 |
-| median error, anchored | 0.454 px | **0.042 px** |
-| latency, median / p95 | | 212 ms / 215 ms |
+| accuracy, all pairs (n=324) | 0.377 | 0.469 |
+| median error, anchored | 0.454 px | **0.035 px** |
+| latency, median / p95 | | 725 ms / 1281 ms |
 
-Latency is a property of the machine, not of the code: macOS-26.5.2-arm64-arm-64bit · Python 3.12.13 · commit `878ea59`. The same 324 pairs on a different machine will report a different figure and the same accuracy.
+Latency is a property of the machine, not of the code: Windows-11-10.0.26200-SP0 · Python 3.12.13 · commit `257cbcd`. The same 324 pairs on a different machine will report a different figure and the same accuracy.
 
 Regenerate with `uv run python -m src.evaluate --data dataset --out results/full_324.csv`, then `uv run python -m scripts.render_results --write`.
 
@@ -76,7 +76,7 @@ The unanchored result is the honest one and not a defect. An unanchored
 reference is a periodic patch with no aperiodic feature in frame, so the
 correlation evidence does not identify a location — the generator asserts that
 such a layout carries an empty anchor list, which puts the ceiling on this
-dataset at 0.500 and the system at 0.852 of what is achievable. The true peak
+dataset at 0.500 and the system at 0.938 of what is achievable. The true peak
 is absent from the top 30 candidates in **160 of the 162** unanchored cases, so
 this is not a near miss. Every one of them escalates, returns the centre-prior
 answer and carries the low-confidence flag; **none returns a confident wrong
@@ -95,30 +95,38 @@ simulated physics are literature-backed and which are declared assumptions.
 
 Three results from the 324-pair run that are not visible in the table above.
 
-- **The physics chain did not cost accuracy.** The comparison is against
-  `dataset_control`, a paired noise-free control sharing every scene and seed
-  with the shipped set: anchored **0.827 clean against 0.852 with noise**, so
-  the noisy set scores marginally *higher*. Across noise strata anchored
-  accuracy is 83.3% / 83.3% / 88.9% for low / medium / high — high noise scored
-  highest. ZNCC is normalised, so the current noise magnitudes do not move it.
+- **Pose estimation closed the largest gap in the system.** Before Stage 1
+  landed, anchored accuracy fell from 0.963 at `pose=none` to **0.667** at
+  `pose=large` — a 0.296 collapse, and the single worst stratum. It now reads
+  0.944 / 0.944 / **0.926** across none / small / large: the gap is 0.018, and
+  rotated pairs are no longer meaningfully harder than unrotated ones. That is
+  where the headline `0.852 → 0.938` came from.
+- **Rotation is estimated; scale is not.** `theta_est` is live and varies over
+  ±8.4° on 239 of 324 pairs. `scale_est` is exactly 10.0 on **all 324**, so the
+  scale residual is still pinned at nominal and `scale_residual` remains a dead
+  confidence feature. The dataset does carry scale mismatch, so this is
+  headroom rather than a defect.
+- **The physics chain did not cost accuracy.** Across noise strata anchored
+  accuracy is **90.7% / 94.4% / 96.3%** for low / medium / high — accuracy rises
+  with noise. ZNCC is normalised, so the current noise magnitudes do not move
+  it, and what little ordering there is runs the wrong way to be a noise effect.
   Worth stating deliberately rather than claiming noise robustness by accident.
-  (The comparison is *not* against the superseded 108-pair geometry-only set;
-  those figures are not comparable, per the note above.)
-- **Pose is the dominant degradation axis.** On the anchored stratum, **0.963 at
-  `pose=none` against 0.667 at `pose=large`** — all-pairs, the same split reads
-  48.1% against 33.3%. Rotation and scale estimation is not yet implemented, so
-  rotated pairs are matched at nominal pose.
+  (`results/control_324.csv`, the paired noise-free control, has not yet been
+  re-run against Stage 1, so the clean-versus-noisy comparison it supported is
+  withheld rather than quoted stale.)
 - **One stage dominates latency.** Scoring the reference's uniqueness map is
   **60.6% of the call**. That share is the portable number — it holds on either
   machine, where the absolute milliseconds do not; the same 324 pairs run about
-  1.7x slower on Windows 11 / AMD Zen 3 than on the Mac named above, with the
-  gap concentrated in FFT-heavy work. The map depends only on the reference, so
+  1.7x slower on the Windows 11 / AMD Zen 3 box stamped above than on the Apple
+  Silicon Mac that produced the previously published figures, with the gap
+  concentrated in FFT-heavy work. The map depends only on the reference, so
   a repeat visit to the same site is served from cache; the figures above are
   the cold cost, which is what a sweep over distinct references measures.
 
-Escalation is worth **+7.4 points on anchored references and +0.0 on
-unanchored** ones, which is why the unanchored stratum is answered and flagged
-rather than retried.
+Escalation remains worth nothing on the unanchored stratum — no amount of
+compute recovers an answer the evidence does not contain — which is why those
+cases are answered and flagged rather than retried. The anchored-side figure
+was measured before Stage 1 landed and is not requoted here.
 
 ## How it works
 
@@ -145,7 +153,7 @@ behind them, and `benchmarks/README.md` to reproduce every number.
 
 ```
 src/          pipeline modules; localize.py is the deliverable
-tests/        576 tests
+tests/        586 tests
 benchmarks/   reproducible timing, accuracy and calibration reports
 results/      tracked CSV evidence behind every number in this file
 docs/         failure analysis, citations, engineering notes and handoff
