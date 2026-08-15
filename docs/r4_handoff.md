@@ -17,15 +17,15 @@ CI and packaging.
 | T6 | `localize()` wiring, escalation ladder | done |
 | T8 | Uniqueness-weighted correlation | done, **live** — R3's map has landed |
 | T9 | Profiling and caching | done |
-| T7 | Stage 6 — confidence calibrator | done, **at chance** (CV AUC 0.570) |
+| T7 | Stage 6 — confidence calibrator | done, **at chance** (CV AUC 0.552) |
 | P3 | Threshold tuning | done — swept and validated; 8.0/4.0 retained |
 | P3 | Low-confidence flag hardening | done |
 | P3 | Per-stage timing instrumentation | done, opt-in |
 | P3 | Uniqueness-map cross-call cache | done — 4.3x on a warm reference |
 | P3 | Full evaluation on 324 physics pairs | done |
 
-498 tests on `main`; 571 with the Phase 3 branches. Ruff, ruff-format and mypy
-strict all clean. CI green.
+586 tests on `main`. Ruff, ruff-format and mypy strict all clean. CI green,
+and the clean-room check passes on the merged tree.
 
 ## Headline numbers
 
@@ -35,13 +35,12 @@ no load or run failures, `failure_mode: none` throughout.
 
 | | value |
 |---|---|
-| accuracy, all pairs | 42.6% |
-| accuracy, **anchored** references | **85.2%** (138/162) |
+| accuracy, all pairs | 46.9% |
+| accuracy, **anchored** references | **93.8%** (152/162) |
 | accuracy, unanchored references | 0.0% |
-| median error, anchored | 0.042 px |
-| auto-mode latency, median / p95 | 206 ms / 225 ms (Mac) · 356 / 363 (Windows) |
-| `fast`-mode latency, median | 51 ms (Windows) |
-| confidence, cross-validated AUC | 0.570 |
+| median error, anchored | 0.035 px |
+| auto-mode latency, median / p95 | 725 ms / 1281 ms (Windows, post-pose) |
+| confidence, cross-validated AUC | 0.552 |
 
 **Latency is quoted per machine and accuracy is not, because only one of them
 varies.** Accuracy reproduces to the digit across both of our machines. Latency
@@ -57,28 +56,37 @@ unanchored reference is a periodic patch with no aperiodic feature in frame; the
 correlation evidence genuinely does not identify a position. That is an
 information-theoretic limit, not an algorithmic one, and the correct response is
 to answer and flag rather than to succeed. The measurement that makes this
-concrete: escalating an unanchored case buys **+0.0** accuracy, while the same
-escalation on an anchored reference buys **+7.4 points**.
+concrete: escalating an unanchored case buys **+0.0** accuracy. The
+corresponding anchored-side figure was measured before Stage 1 and is not
+requoted here.
 
-### What the physics dataset changed
+### What physics, then pose, changed
 
-Superseding every number previously quoted here against 108 geometry-only pairs.
+Two dataset-level events superseded earlier figures. Physics landing did not
+move accuracy; Stage 1 landing moved it a great deal.
 
-| | 108, clean | **324, physics** |
-|---|---|---|
-| accuracy, all pairs | 41.7% | 42.6% |
-| accuracy, anchored | 83.3% | 85.2% |
-| accuracy, unanchored | 0.0% | 0.0% |
-| median error, anchored | 0.028 px | 0.042 px |
+| | 108, clean | 324, physics | **324, +pose** |
+|---|---|---|---|
+| accuracy, all pairs | 41.7% | 42.6% | **46.9%** |
+| accuracy, anchored | 83.3% | 85.2% | **93.8%** |
+| accuracy, unanchored | 0.0% | 0.0% | 0.0% |
+| median error, anchored | 0.028 px | 0.042 px | **0.035 px** |
 
 **The physics chain did not cost accuracy.** Across noise strata anchored
-accuracy is 83.3% / 83.3% / 88.9% for low / medium / high — high noise scored
-highest. ZNCC is normalised, so a 1.8x spread in capture noise does not move it.
-Worth stating deliberately rather than claiming noise robustness by accident.
+accuracy now reads 90.7% / 94.4% / 96.3% for low / medium / high — it rises with
+noise. ZNCC is normalised, so the current magnitudes do not move it, and the
+ordering runs the wrong way to be a noise effect. Worth stating deliberately
+rather than claiming noise robustness by accident.
 
-**Pose is now the dominant degradation axis**: 48.1% at `pose=none` against
-33.3% at `pose=large`, a ~15 point drop. This is the first measurement that
-prices R2's missing `pose.py`.
+**Pose was the dominant degradation axis, and is no longer.** Anchored accuracy
+used to fall from 0.963 at `pose=none` to **0.667** at `pose=large` — the worst
+stratum in the system. Post-Stage-1 it reads 0.944 / 0.944 / **0.926**, so a
+0.296 collapse became 0.018. That is where the +0.086 anchored came from.
+
+**Rotation is estimated; scale is not.** `theta_est` varies over -8.44 to 7.73
+degrees on 239 of 324 pairs, while `scale_est` is exactly 10.0 on all 324. One
+of the two pose residuals is live, the other still pinned — unclaimed headroom
+rather than a defect, since the dataset does carry scale mismatch.
 
 ### PSR and the escalation thresholds
 
@@ -86,9 +94,11 @@ PSR collapsed relative to the thresholds: median **2.25**, p95 3.05, against
 `PSR_ACCEPT_THRESHOLD = 8.0`. **320 of 324 cases escalate to the ambiguous
 tier**, so the ladder is effectively inert.
 
-Retuning does not fix this. `AUC(psr -> correct)` is 0.581, and 0.557 at the
-fast tier, so PSR barely separates correct from wrong and every millisecond
-bought costs accuracy near-linearly:
+Retuning does not fix this. `AUC(psr -> correct)` is 0.633 post-pose — its best
+showing yet, and still weak — so PSR barely separates correct from wrong and
+every millisecond bought costs accuracy near-linearly. The sweep below was
+measured **pre-Stage-1** and has not been re-run; the ordering it establishes
+holds, the absolute rows do not:
 
 | accept | stop at fast | accuracy | mean ms | false accepts |
 |---:|---:|---:|---:|---:|
@@ -105,7 +115,8 @@ statistic, not the number.
 
 Per-stage, from `Diagnostics.stage_ms` (enable with
 `config.COLLECT_STAGE_TIMINGS`). Cold, which is what a sweep over distinct
-references measures. Absolute figures are Windows 11 / AMD Zen 3; **the
+references measures. Absolute figures are Windows 11 / AMD Zen 3 and were taken
+**pre-Stage-1**, so the totals no longer match the headline latency; **the
 percentage column is the portable one** and should be what gets quoted.
 
 | stage | mean ms | % of call |
@@ -121,7 +132,7 @@ percentage column is the portable one** and should be what gets quoted.
 
 Accuracy is perfectly bimodal, so a feature that separated anchored from
 unanchored would nearly solve confidence outright — `AUC(anchoredness ->
-correct) = 0.935`. Nothing available does:
+correct) = 0.971`. Nothing available does:
 
 | statistic | AUC vs anchoredness |
 |---|---:|
@@ -134,8 +145,8 @@ the unanchored one. If it does not, the map is not working." On this dataset it
 does not. Switching `localize.py` to it was measured and **rejected** — at 0.493
 it is worse than the current wiring, so the mean stays.
 
-This one gap blocks two things at once: the confidence calibrator (CV AUC 0.570,
-three of six features still dead constants) and a free 43% latency cut, since
+This one gap blocks two things at once: the confidence calibrator (CV AUC 0.552,
+two of six features still dead constants) and a free 43% latency cut, since
 skipping escalation on unanchored cases would give 203 ms at identical accuracy.
 
 The map itself is not the problem — as a *weighting* mechanism it earns its

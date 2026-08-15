@@ -68,16 +68,17 @@ standardised coefficients, and the full threshold trade-off between false
 confidence and wasted escalation.
 
 Produces: the cross-validated AUC, the dead-feature table, and the
-accuracy-by-anchor split. On the 324-pair physics set: **CV AUC 0.570**, with
-three of six features carrying no variance — `log1p_n_tied`, `scale_residual`
-and `abs_theta`. `uniqueness_score` does vary now that R3's map is real, and is
-the best single feature at AUC 0.585, marginally ahead of `psr` at 0.581.
+accuracy-by-anchor split. On the 324-pair physics set as regenerated against
+Stage 1: **CV AUC 0.552**, with two of six features carrying no variance —
+`log1p_n_tied` and `scale_residual`. `abs_theta` came alive when pose landed.
+`psr` is now the best single feature at AUC 0.633, ahead of `uniqueness_score`
+at 0.549; `ncc_peak` scores 0.459, marginally *below* chance.
 
 Writing a model with `--out` is optional and still **not recommended** — at CV
-AUC 0.570 the model is near chance, and shipping it would replace an honest
+AUC 0.552 the model is near chance, and shipping it would replace an honest
 heuristic with a calibrator that looks authoritative. Revisit when some
 diagnostic separates anchored from unanchored references; that signal is worth
-AUC 0.935 on its own.
+AUC 0.971 on its own.
 
 ### `verify_uniqueness_integration.py` — R3 readiness
 
