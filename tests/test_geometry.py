@@ -448,6 +448,22 @@ def test_manifest_describes_the_dataset(tiny_dataset):
     }
 
 
+def test_manifest_pose_ranges_match_the_strata_present(tiny_dataset):
+    """``pose_ranges`` must describe this dataset, not the constant table.
+
+    It once dumped every entry of ``POSE_RANGES``, which read as correct only
+    while that table happened to equal the shipped strata. Adding ``stress``
+    broke the coincidence: manifests then advertised a stratum their own
+    ``strata_counts`` did not list, and a regenerated shipped manifest stopped
+    matching the tracked one for a reason that had nothing to do with the data.
+    """
+    import json
+
+    manifest = json.loads((tiny_dataset / MANIFEST_NAME).read_text())
+    assert set(manifest["pose_ranges"]) == set(manifest["strata_counts"]["pose_condition"])
+    assert "stress" not in manifest["pose_ranges"]
+
+
 def test_verify_accepts_an_untouched_dataset(tiny_dataset):
     """A clean dataset must verify."""
     assert verify_dataset(tiny_dataset)["pair_count"] == expected_pair_count(1)

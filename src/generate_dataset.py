@@ -755,6 +755,7 @@ def write_manifest(
         for axis in ("architecture", "anchor", "noise_level", "pose_condition")
     }
     anchored = [r for r in records if r.strata["anchor"] == "anchored"]
+    poses = DEFAULT_POSE_CONDITIONS if pose_conditions is None else pose_conditions
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "pair_count": len(records),
@@ -778,7 +779,11 @@ def write_manifest(
         "strata_counts": counts,
         "anchored_references_with_anchor": sum(1 for r in anchored if r.anchors_in_reference > 0),
         "layout_ranges_nm": {"dram": DRAM_RANGES, "finfet": FINFET_RANGES},
-        "pose_ranges": {k: [list(v[0]), list(v[1])] for k, v in POSE_RANGES.items()},
+        # Only the strata this dataset actually contains. Dumping all of
+        # POSE_RANGES was accurate while it happened to equal the shipped set;
+        # adding ``stress`` broke that, and every regenerated manifest then
+        # advertised a stratum its own strata_counts does not list.
+        "pose_ranges": {k: [list(v[0]), list(v[1])] for k, v in POSE_RANGES.items() if k in poses},
     }
     path = output_dir / MANIFEST_NAME
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
