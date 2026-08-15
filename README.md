@@ -166,7 +166,7 @@ behind them, and `benchmarks/README.md` to reproduce every number.
 
 ```
 src/          pipeline modules; localize.py is the deliverable
-tests/        576 tests
+tests/        588 tests
 benchmarks/   reproducible timing, accuracy and calibration reports
 results/      tracked CSV evidence behind every number in this file
 docs/         failure analysis, citations, engineering notes and handoff
