@@ -1,12 +1,12 @@
 {
-  "generated_utc": "2026-08-13T08:26:02+00:00",
-  "commit": "878ea59",
+  "generated_utc": "2026-08-15T06:06:44+00:00",
+  "commit": "257cbcd",
   "cases": 324,
-  "dataset": "dataset",
+  "dataset": "data",
   "mode": "auto",
-  "platform": "macOS-26.5.2-arm64-arm-64bit",
-  "machine": "arm64",
-  "processor": "arm",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
+  "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
   "python": "3.12.13",
   "numpy": "2.5.1"
 }
