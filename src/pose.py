@@ -94,9 +94,11 @@ def _prepare(image: FloatArray, size: int) -> np.ndarray:
     x = (x - float(x.mean())) / (std + 1e-7)
 
     if x.shape != (size, size):
+        # scikit-image ships only partial annotations, so this call is untyped
+        # as far as mypy is concerned. The cast pins what it actually returns.
         resized = cast(
             np.ndarray,
-            resize(
+            resize(  # type: ignore[no-untyped-call]
                 x,
                 (size, size),
                 order=1,
@@ -123,7 +125,13 @@ def _prepare(image: FloatArray, size: int) -> np.ndarray:
         hann_1d,
     )
 
-    return (x * window).astype(np.float32)
+    # `x` is a bare `np.ndarray`, so `.astype` on the product is typed `Any`.
+    # `np.asarray` with an explicit dtype carries the annotation through; the
+    # product is already float32, so this is the same array, not a copy.
+    return np.asarray(
+        x * window,
+        dtype=np.float32,
+    )
 
 
 def _fft_log_magnitude(image: np.ndarray) -> np.ndarray:
