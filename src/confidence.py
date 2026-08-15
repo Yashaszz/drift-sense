@@ -26,38 +26,46 @@ fitted model is present, :class:`ConfidenceModel` falls back to
 Status
 ------
 Fitted, serialised and wired (T7). On the current data it does **not**
-discriminate: cross-validated AUC is 0.570 over the 324-pair physics set, which
-is near chance. (An earlier revision of this line quoted 0.504 over 108
-geometry-only pairs; that is a different dataset, not a worse measurement of
-this one.)
+discriminate: cross-validated AUC is **0.552** over the 324-pair physics set,
+which is near chance. Every figure in this section is re-derived from
+``results/full_324.csv`` as regenerated against Stage 1; earlier revisions
+quoted 0.504 over 108 geometry-only pairs and 0.570 over the pre-pose 324, both
+of which are different datasets rather than worse measurements of this one.
 
-That is a data problem, not a model problem. **Three** of the six features are
-constant because the diagnostics feeding them are still stubs: ``n_tied`` never
-varies with ``TIE_SIGMA = 0.0``, and both pose residuals are pinned while
-``estimate_pose`` returns nominal. Measured on ``results/full_324.csv``:
+That is a data problem, not a model problem — but the shape of the problem
+changed when pose landed:
 
-===================  ========  ==========================
-feature              variance  AUC against a correct answer
-===================  ========  ==========================
-``uniqueness_score``  5.0e-04   0.585
-``psr``               6.9e-01   0.581
-``ncc_peak``          9.1e-02   0.539
-``log1p_n_tied``      0.0       dead
-``scale_residual``    0.0       dead
-``abs_theta``         0.0       dead
-===================  ========  ==========================
+===================  =========  ==========================
+feature               variance  AUC against a correct answer
+===================  =========  ==========================
+``psr``               5.400e-01   0.633
+``uniqueness_score``  5.034e-04   0.549
+``abs_theta``         3.465       0.545
+``ncc_peak``          3.154e-02   0.459
+``log1p_n_tied``      0.0         dead
+``scale_residual``    0.0         dead
+===================  =========  ==========================
 
-``uniqueness_score`` is **no longer constant** — R3's map has been real since
-PR #13, and it is now the best single feature, though only just. The
-counterfactual that predicted AUC 0.926 from a working map did not survive
-contact with the real one: the map varies, and cross-validated AUC is 0.570.
+**Two** features are constant, not three. ``n_tied`` never varies with
+``TIE_SIGMA = 0.0``, and ``scale_residual`` is pinned because ``estimate_pose``
+returns exactly the nominal scale on all 324 pairs. ``abs_theta`` is **no longer
+dead** — Stage 1 estimates rotation over a -8.44 to 7.73 degree range — so only
+one of the two pose residuals is still inert.
 
-The signal that would work is still known. Accuracy splits **0.852 on anchored
-references against 0.000 on unanchored ones** (324-pair set), and an oracle
-anchored/unanchored indicator scores **AUC 0.935** on its own — for a binary
-indicator AUC equals balanced accuracy, and sensitivity 1.000 with specificity
-0.871 gives exactly that. No available
-diagnostic recovers that split, which is why the model stays at chance.
+Two reversals worth not glossing over. ``psr`` has overtaken
+``uniqueness_score`` as the best single feature, so the map is no longer the
+strongest signal it briefly was. And ``ncc_peak`` now scores **below** chance:
+a higher correlation peak is, very weakly, evidence of a *wrong* answer. On a
+periodic lattice that is not absurd — a confident peak on the wrong cell looks
+exactly like a confident peak on the right one — but it is a 0.459, not a
+finding, and it should not be read as one until someone measures it properly.
+
+The signal that would work is still known, and pose sharpened it. Accuracy
+splits **0.938 on anchored references against 0.000 on unanchored ones**, and an
+oracle anchored/unanchored indicator scores **AUC 0.971** on its own: for a
+binary indicator AUC equals balanced accuracy, and sensitivity 1.000 with
+specificity 0.942 gives exactly that. No available diagnostic recovers that
+split, which is why the model stays at chance.
 
 So no fitted model ships. ``localize`` falls back to the conservative heuristic,
 which is honest about knowing little, rather than to a calibrator that would
