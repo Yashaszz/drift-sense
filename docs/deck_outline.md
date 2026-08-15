@@ -225,7 +225,7 @@ Research & References).
 
 - **Stack:** Python 3.12, NumPy, SciPy, OpenCV, scikit-image, Pillow. No deep
   learning, no pretrained weights, no network access at runtime.
-- **Reproducibility:** `uv.lock` and `.python-version` committed; 588 tests;
+- **Reproducibility:** `uv.lock` and `.python-version` committed; 597 tests;
   ruff, ruff-format and mypy in CI; a clean-room check that unpacks
   `git archive` and runs the suite, the linters and the CLI against exactly
   what a grader unzips.
