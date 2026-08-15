@@ -24,7 +24,7 @@ CI and packaging.
 | P3 | Uniqueness-map cross-call cache | done — 4.3x on a warm reference |
 | P3 | Full evaluation on 324 physics pairs | done |
 
-588 tests on `main`. Ruff, ruff-format and mypy strict all clean. CI green,
+597 tests on `main`. Ruff, ruff-format and mypy strict all clean. CI green,
 and the clean-room check passes on the merged tree.
 
 ## Headline numbers
