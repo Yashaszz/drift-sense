@@ -786,7 +786,7 @@ def estimate_pose(
                 quality=float(
                     min(
                         fallback_quality,
-                        0.25,
+                        0.19,
                     )
                 ),
             )
