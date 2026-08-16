@@ -145,11 +145,19 @@ an unanchored layout carries an empty anchor list, so the stratum is built to
 contain no distinguishing feature. The ceiling is 0.500 and we are at 0.938 of
 what is achievable. The true peak is absent from the top 30 candidates in 160
 of 162 unanchored cases — not a near miss, the information is not there. All
-162 escalate, answer with the mandated centre prior, and carry a low-confidence
-flag.
+162 escalate to the ambiguous tier, answer with the highest-scoring lattice
+cell, and carry a low-confidence flag.
 
 > Speaker note: if a judge challenges the 0.469, this is the answer. Do not
 > apologise for the zero; explain why a correct system must produce it.
+
+> Speaker note: do **not** say these come back as the centre prior — an earlier
+> draft did. The centre tie-break decides between candidates that tie, and with
+> `TIE_SIGMA = 0.0` nothing ties: `n_tied` is 1 and `tie_break_used` is `False`
+> in all 324 rows. The centre-of-image answer is the failure degradation, and
+> `failure_mode` is `none` everywhere. If asked where the unanchored answers
+> land: a median 386 px from the centre, i.e. scattered across the lattice —
+> which is exactly what "the evidence does not identify a position" looks like.
 
 ## Slide 6 — Failure analysis and explainability
 

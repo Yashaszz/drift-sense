@@ -277,9 +277,23 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
-dataset/
 dataset_incomplete_105/
-dataset_holdout/
+
+# dataset/ is the shipped development set and dataset_holdout/ is the
+# pre-registered holdout. Every headline number in the README, the failure
+# analysis and the deck is measured on one of these two, so they need the same
+# images-out/provenance-in treatment as the three sets below -- which they did
+# not get: they were bare directory excludes, which took their manifest and
+# ground truth with them. A clone therefore could not verify a single headline
+# figure, and docs/failure_analysis.md section 8 cited holdout tree hashes that
+# lived only in an untracked file.
+dataset/*
+!dataset/dataset_manifest.json
+!dataset/ground_truth.jsonl
+
+dataset_holdout/*
+!dataset_holdout/dataset_manifest.json
+!dataset_holdout/ground_truth.jsonl
 
 # dataset_control is the paired noise-free control for dataset/: the same 324
 # scenes and seeds with noise_level alone changed, which is what lets it be
