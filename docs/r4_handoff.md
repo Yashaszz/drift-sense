@@ -244,6 +244,15 @@ strata need wider separation before anyone cites noise robustness.
 ## Edge cases and known limitations
 
 - **Unanchored references cannot be solved.** By construction, not by defect.
+- **Rotation is quantised to 0.703°.** Stage 1 reads its angle off a 512-row
+  log-polar surface, so it can only return multiples of 360/512. Every
+  `theta_est` in `results/full_324.csv` is an exact bin multiple — 24 distinct
+  values across 324 pairs — and the error carries a systematic negative bias of
+  −0.50° mean / −0.62° median. A spatial-NCC refiner for sub-bin angles existed
+  in `pose.py` but was never called, so it was never executed or tested; it has
+  been removed rather than left dormant. Resolving this is a real accuracy win
+  and it moves every published figure, so it belongs to a deliberate
+  re-measurement of all six result sets, not to a late patch.
 - **PSF estimation declines on periodic layouts.** `estimate_psf_sigma` fits a
   Gaussian rolloff to the radial power spectrum and gates on fit quality. On a
   lattice-dominated spectrum an ungated fit returned a confident ~2.4 regardless
