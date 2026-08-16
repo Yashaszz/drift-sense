@@ -4,8 +4,9 @@ Runs :func:`src.localize.localize` over every pair in the dataset and writes one
 CSV row per case, then prints per-stratum aggregates.
 
 This module is the measurement authority for the team. It is deliberately dumb:
-no plots, no config file, no clever caching. Its only job is to turn 36 image
-pairs into a table of numbers that R1, R2 and R4 can each point at.
+no plots, no config file, no clever caching. Its only job is to turn a dataset
+directory of image pairs into a table of numbers that R1, R2 and R4 can each
+point at.
 
 Usage
 -----
@@ -16,10 +17,10 @@ Notes
 -----
 ``localize()`` returns a single answer, so this harness measures **top-1
 accuracy only**. ``recall@K`` requires the candidate list *before*
-disambiguation and must call the matcher directly -- see
-:func:`recall_at_k_pass` at the bottom of this file. Keeping the two numbers
-separate is deliberate: top-1 failing while recall@K passes means the
-disambiguator picked wrong; both failing means the matcher never had the answer.
+disambiguation and must call the matcher directly, so it lives in
+:mod:`src.recall` rather than here. Keeping the two numbers separate is
+deliberate: top-1 failing while recall@K passes means the disambiguator picked
+wrong; both failing means the matcher never had the answer.
 """
 
 from __future__ import annotations

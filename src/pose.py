@@ -495,9 +495,10 @@ def estimate_pose(
         # content correspondence -- the argmax is noise. It capped quality at
         # 0.25, above localize's _MIN_POSE_QUALITY of 0.20, so that noise was
         # accepted and rotated the template by a meaningless angle. It never
-        # fired on any tracked run (all 1716 recorded estimates sit on the
-        # Fourier-Mellin bin grid), so removing it moves no measured number; it
-        # was a live hazard only on inputs that make the spectral path raise.
+        # fired on any tracked run: all 1830 theta_est values across
+        # results/*.csv sit exactly on the Fourier-Mellin bin grid, deviation
+        # 0.000e+00. So removing it moves no measured number; it was a live
+        # hazard only on inputs that make the spectral path raise.
         logger.debug("pose estimation failed; using nominal pose", exc_info=True)
 
         try:
