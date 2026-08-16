@@ -105,8 +105,9 @@ def load_cases(gt_path: Path) -> list[dict[str, Any]]:
             f"{gt_path} not found. Dataset images are gitignored, so they do not "
             "arrive with a git pull -- regenerate them from seed with "
             "`python -m src.generate_dataset --output-dir dataset --seed 20260807`. "
-            "Generation is byte-reproducible, so the rebuilt pairs match the "
-            "tracked ground truth and manifest exactly."
+            "Generation is pixel-reproducible, so the rebuilt pairs carry the "
+            "tracked ground truth and reproduce the manifest's image_tree_sha256 "
+            "-- which is what verify_dataset checks."
         )
 
     cases: list[dict[str, Any]] = []

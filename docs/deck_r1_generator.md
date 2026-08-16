@@ -111,10 +111,14 @@ It is powered rather than decorative:
   standard error is ~0.12 px against a 0.2 px tolerance, so the gate cannot tell
   a defect from scatter and says so
 
-**Generation is byte-reproducible across platforms.** The held-out set's image
+**Generation is pixel-reproducible across platforms.** The held-out set's image
 hash was published *before* anyone regenerated it; a macOS run reproduced
 `d51df27b…` exactly against the Windows original. Pre-registered prediction, not
 a file compared with itself.
+
+The headline says *pixel*, and the evidence below it is the image-tree hash —
+the two now agree. Byte-level (`file_tree_sha256`) was never cross-checked and
+is not claimed.
 
 **Source:** `src/generate_dataset.py` (`summarise_overlay`), `tests/test_geometry.py`,
 `dataset_holdout/dataset_manifest.json`.

@@ -470,9 +470,12 @@ Per-case rows — including `psr`, `n_tied`, `tie_break_used`, `uniqueness_score
 `confidence` and `failure_mode` — are in the CSVs, which are tracked as evidence.
 Dataset integrity is verifiable against `dataset/dataset_manifest.json`.
 
-Generation is byte-reproducible across platforms, verified 2026-08-12 against
-pre-registered hashes on Windows and Mac, so the dataset can be regenerated from
-seed rather than transferred:
+Generation is pixel-reproducible across platforms, verified 2026-08-12 against a
+pre-registered `image_tree_sha256` on Windows and Mac, so the dataset can be
+regenerated from seed rather than transferred. That is the load-bearing claim:
+`verify_dataset` checks the image-tree hash, and identical pixels are what every
+number in this document depends on. Byte-level PNG identity is *not* claimed —
+see `docs/assumptions.md` section 6:
 
 ```bash
 uv run python -m src.generate_dataset --output-dir dataset --seed 20260807

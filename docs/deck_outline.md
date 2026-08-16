@@ -114,9 +114,18 @@ one.
 - **Every parameter is tagged** in `docs/citations.md` — cited mechanism *and*
   magnitude, cited mechanism with our number, or declared assumption. Most of
   the SEM chain is the latter two, and the document says so.
-- **Byte-reproducible across platforms.** The holdout's tree hashes were
-  pre-registered before generation and a Mac run reproduced them exactly
-  against the Windows values.
+- **Pixel-reproducible across platforms.** The holdout's `image_tree_sha256` was
+  pre-registered before generation and a Mac run reproduced it exactly against
+  the Windows value — pre-registered prediction, not a file compared with
+  itself.
+
+> Speaker note: say **pixel**-reproducible, not byte-. Only the image-tree hash
+> was cross-checked. `file_tree_sha256` covers the encoded PNG bytes, which ride
+> on the zlib build inside each platform's Pillow wheel; `file_tree_hash`'s own
+> docstring calls it a diagnostic — "same pixels with different file hashes
+> means the encoders differ and the data is fine". Claiming byte-identity is
+> claiming something we never measured and that the code does not expect to
+> hold.
 
 **Say this before a judge asks it:** our dimensions are relaxed 1.5–5x from
 production silicon. Not because tighter is hard, but because at real ground

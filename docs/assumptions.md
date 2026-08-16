@@ -217,8 +217,40 @@ published in advance from Windows. Pixel-level cross-platform reproducibility is
 therefore established by pre-registered prediction rather than by comparing a
 file against itself.
 
-> **TODO:** confirm byte-level (`file_tree_sha256`, `dcdcb969…`) and record the
-> outcome here. Pixel-level is established; byte-level is one comparison away.
+**Byte-level was never confirmed, and is deliberately not claimed.** Recorded
+2026-08-16, closing the TODO that stood here.
+
+The 2026-08-12 macOS run compared `image_tree_sha256` only. It could not have
+done otherwise: `verify_dataset` checks the image-tree hash and never reads
+`file_tree_sha256` (`generate_dataset.py:850`), and the generator CLI prints
+only the image hash (`generate_dataset.py:1362`), so `dcdcb969…` never appeared
+in any output an operator saw. It appears exactly once in this repository — in
+the TODO that used to sit here, asking for it.
+
+It is also not a defect that it is unconfirmed. `file_tree_hash` is a
+*diagnostic*, by its own docstring: "same pixels with different file hashes
+means the encoders differ and the data is fine". `compare_manifests` agrees,
+classifying that case as "identical pixels, different PNG encoding — harmless,
+the data matches". PNG bytes are zlib-compressed, and the zlib build ships
+inside each platform's Pillow wheel, so byte-identity across platforms is not
+merely unmeasured but not expected.
+
+What *is* established:
+
+| claim | status |
+|---|---|
+| same platform, same seed → identical pixels **and** bytes | verified, two runs |
+| cross-platform → identical pixels (`d51df27b…`) | verified by pre-registered prediction |
+| cross-platform → identical PNG bytes (`dcdcb969…`) | **not claimed**, not measured |
+
+Three documents previously stated the byte-level claim as done. They now say
+pixel-level, which is what the evidence supports and what every downstream
+number actually needs.
+
+> **If you want to close the gap properly:** print `file_tree_sha256` alongside
+> the image hash in the generator CLI, then regenerate on a second platform.
+> Until the CLI surfaces it, the comparison stays impractical rather than
+> merely undone.
 
 ---
 
@@ -228,4 +260,5 @@ file against itself.
 - [ ] Source the seven DRAM/FinFET dimensions, or replace each with an explicit
       engineering rationale
 - [ ] Optional: source a 3σ CD variation figure to upgrade the tolerance claim
-- [ ] Record the byte-level reproducibility result
+- [x] Record the byte-level reproducibility result — done 2026-08-16: not
+      confirmed, not claimed, and not expected to hold (section 6)
