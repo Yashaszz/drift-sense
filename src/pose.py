@@ -22,6 +22,24 @@ Public API is frozen:
     estimate_pose(reference, search, nominal_scale)
 
 Never raises.
+
+Known limitation — rotation is quantised to the log-polar bin
+------------------------------------------------------------
+The estimate is read off a 512-row log-polar correlation surface, so it can only
+take multiples of 360/512 = 0.703125 deg. On the 324-pair set that is exactly
+what it does: every ``theta_est`` in ``results/full_324.csv`` is an exact bin
+multiple, spread over 24 distinct values, and the rotation error carries a
+systematic negative bias of -0.50 deg mean / -0.62 deg median.
+
+A spatial-NCC refiner that would resolve sub-bin angles was written and never
+wired in. It is deleted rather than left dormant: it was unreachable, so it was
+never executed or tested, and the accuracy it claims is unmeasured. Enabling it
+would move every published figure, which is a change to make with a
+re-measurement rather than late.
+
+The next step is that refinement, or a parabolic interpolation across the three
+rows around the peak, measured against the same 324 pairs before anything
+downstream quotes a new number.
 """
 
 from __future__ import annotations
@@ -452,106 +470,6 @@ def _estimate_fourier_mellin(
     return (
         float(angle),
         float(residual_scale),
-        quality,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Rotation refinement
-# ---------------------------------------------------------------------------
-
-
-def _refine_rotation(
-    reference: np.ndarray,
-    search: np.ndarray,
-    initial_angle: float,
-) -> tuple[float, float]:
-    """
-    Refine rotation using spatial NCC.
-
-    Residual scale remains fixed at 1.0.
-    """
-    side = max(
-        min(
-            reference.shape[0],
-            reference.shape[1],
-            search.shape[0],
-            search.shape[1],
-        ),
-        64,
-    )
-
-    side = min(
-        int(side),
-        256,
-    )
-
-    if side % 2:
-        side += 1
-
-    ref = _prepare(
-        reference,
-        side,
-    )
-
-    sea = _prepare(
-        search,
-        side,
-    )
-
-    initial_angle = _normalize_angle(float(initial_angle))
-
-    coarse_angles = np.arange(
-        initial_angle - 20.0,
-        initial_angle + 20.01,
-        2.0,
-    )
-
-    best_score = -1.0
-    best_angle = initial_angle
-
-    for angle in coarse_angles:
-        angle = _normalize_angle(float(angle))
-
-        score = _pose_score(
-            ref,
-            sea,
-            angle,
-        )
-
-        if score > best_score:
-            best_score = score
-            best_angle = angle
-
-    fine_angles = np.arange(
-        best_angle - 2.0,
-        best_angle + 2.001,
-        0.25,
-    )
-
-    for angle in fine_angles:
-        angle = _normalize_angle(float(angle))
-
-        score = _pose_score(
-            ref,
-            sea,
-            angle,
-        )
-
-        if score > best_score:
-            best_score = score
-            best_angle = angle
-
-    quality = float(
-        np.clip(
-            (best_score + 1.0) * 0.5,
-            0.0,
-            1.0,
-        )
-    )
-
-    return (
-        float(_normalize_angle(best_angle)),
         quality,
     )
 
