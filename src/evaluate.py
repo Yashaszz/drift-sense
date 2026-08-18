@@ -94,17 +94,20 @@ def load_cases(gt_path: Path) -> list[dict[str, Any]]:
     Raises
     ------
     FileNotFoundError
-        If the ground-truth file is absent. ``data/`` is gitignored, so this
-        means R1's dataset has not been copied onto this machine.
+        If the ground-truth file is absent. Dataset *images* are gitignored, so
+        a fresh clone has the ground truth but not the pairs it describes.
     KeyError
         If a required field cannot be resolved under any known alias. The error
         names the record's actual keys so the alias table can be extended.
     """
     if not gt_path.exists():
         raise FileNotFoundError(
-            f"{gt_path} not found. data/ is gitignored, so the dataset does not "
-            "arrive with a git pull -- get the 36 pairs from R1, or regenerate "
-            "them locally with generate_dataset.py."
+            f"{gt_path} not found. Dataset images are gitignored, so they do not "
+            "arrive with a git pull -- regenerate them from seed with "
+            "`python -m src.generate_dataset --output-dir dataset --seed 20260807`. "
+            "Generation is pixel-reproducible, so the rebuilt pairs carry the "
+            "tracked ground truth and reproduce the manifest's image_tree_sha256 "
+            "-- which is what verify_dataset checks."
         )
 
     cases: list[dict[str, Any]] = []
@@ -373,33 +376,15 @@ def print_table(title: str, rows: list[tuple[Any, ...]]) -> None:
         print(f"{key!s:<18}{n:>4}{succ:>10.3f}{med:>10.3f}{psr:>10.3f}{tie:>10.3f}{ms:>9.1f}")
 
 
-# --------------------------------------------------------------------------
-# recall@K -- SECOND PASS, not wired yet
-# --------------------------------------------------------------------------
-
-
-def recall_at_k_pass(cases: list[dict[str, Any]], data_dir: Path, k: int = 30) -> None:
-    """Measure whether the true answer was in the top-K *before* disambiguation.
-
-    Not implemented yet: this must call R4's ``zncc_surface()`` and
-    ``top_k_peaks()`` directly rather than ``localize()``, because by the time
-    ``localize()`` returns, disambiguation has already collapsed the candidate
-    list to one answer.
-
-    Confirm with R4 before writing:
-      1. exact signatures of ``zncc_surface`` and ``top_k_peaks``
-      2. whether the surface is computed at search-image scale or on a
-         downsampled reference (the 10x ratio has to be applied somewhere)
-      3. whether NMS is applied inside ``top_k_peaks`` -- with
-         DEFAULT_NMS_RADIUS_PX = 8 on a 16px lattice, NMS sits exactly at the
-         half-pitch tie spacing and may suppress the true peak before it is
-         ever counted, which would make recall@K look worse than the matcher
-         really is.
-
-    A peak counts as a hit when ``config.window_topleft_to_centre()`` applied to
-    it lands within 1px of ground truth. Do not reimplement that offset by hand.
-    """
-    raise NotImplementedError("Confirm matcher signatures with R4 first.")
+# recall@K lives in src/recall.py, not here. It has to call zncc_surface() and
+# top_k_peaks() directly rather than localize(), because by the time localize()
+# returns, disambiguation has already collapsed the candidate list to one
+# answer. This module used to carry a stub that raised NotImplementedError and a
+# closing note that pointed readers at it; both are gone, because the real
+# implementation shipped and a grader opening this file should not find the
+# placeholder that predates it.
+#
+#   python -m src.recall --data dataset --out results/recall_324.csv --max-k 30
 
 
 # --------------------------------------------------------------------------
@@ -529,7 +514,7 @@ def main() -> None:
 
     print(
         "\nNOTE: top-1 only. recall@K needs the pre-disambiguation candidate "
-        "list -- see recall_at_k_pass()."
+        "list -- run `python -m src.recall` for it."
     )
 
 

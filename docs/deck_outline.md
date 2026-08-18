@@ -114,9 +114,18 @@ one.
 - **Every parameter is tagged** in `docs/citations.md` — cited mechanism *and*
   magnitude, cited mechanism with our number, or declared assumption. Most of
   the SEM chain is the latter two, and the document says so.
-- **Byte-reproducible across platforms.** The holdout's tree hashes were
-  pre-registered before generation and a Mac run reproduced them exactly
-  against the Windows values.
+- **Pixel-reproducible across platforms.** The holdout's `image_tree_sha256` was
+  pre-registered before generation and a Mac run reproduced it exactly against
+  the Windows value — pre-registered prediction, not a file compared with
+  itself.
+
+> Speaker note: say **pixel**-reproducible, not byte-. Only the image-tree hash
+> was cross-checked. `file_tree_sha256` covers the encoded PNG bytes, which ride
+> on the zlib build inside each platform's Pillow wheel; `file_tree_hash`'s own
+> docstring calls it a diagnostic — "same pixels with different file hashes
+> means the encoders differ and the data is fine". Claiming byte-identity is
+> claiming something we never measured and that the code does not expect to
+> hold.
 
 **Say this before a judge asks it:** our dimensions are relaxed 1.5–5x from
 production silicon. Not because tighter is hard, but because at real ground
@@ -145,11 +154,19 @@ an unanchored layout carries an empty anchor list, so the stratum is built to
 contain no distinguishing feature. The ceiling is 0.500 and we are at 0.938 of
 what is achievable. The true peak is absent from the top 30 candidates in 160
 of 162 unanchored cases — not a near miss, the information is not there. All
-162 escalate, answer with the mandated centre prior, and carry a low-confidence
-flag.
+162 escalate to the ambiguous tier, answer with the highest-scoring lattice
+cell, and carry a low-confidence flag.
 
 > Speaker note: if a judge challenges the 0.469, this is the answer. Do not
 > apologise for the zero; explain why a correct system must produce it.
+
+> Speaker note: do **not** say these come back as the centre prior — an earlier
+> draft did. The centre tie-break decides between candidates that tie, and with
+> `TIE_SIGMA = 0.0` nothing ties: `n_tied` is 1 and `tie_break_used` is `False`
+> in all 324 rows. The centre-of-image answer is the failure degradation, and
+> `failure_mode` is `none` everywhere. If asked where the unanchored answers
+> land: a median 386 px from the centre, i.e. scattered across the lattice —
+> which is exactly what "the evidence does not identify a position" looks like.
 
 ## Slide 6 — Failure analysis and explainability
 

@@ -18,6 +18,25 @@ Pipeline:
     4. otherwise use the nominal identity residual pose
     5. keep residual scale fixed at 1.0 because nominal_scale is authoritative
 
+Spectral only, by design
+------------------------
+Rotation is read straight off the log-polar correlation peak, and the estimate
+is therefore quantised to one row of that surface: 360/512 = **0.703125 deg**.
+Every recorded estimate across the tracked runs sits exactly on that grid, and
+a zero-rotation pair typically reports -0.703 rather than 0.000. It costs
+little because the template is rebuilt at the estimated angle either way, but
+it is a real floor on rotation accuracy and it is quoted as a limitation rather
+than hidden.
+
+There is deliberately **no spatial refinement or spatial fallback**. Both were
+tried and both scored candidate angles by NCC between the reference and the
+search resized to a common square -- a 1 um field against a 10 um field, whose
+lattices sit a decade apart in frequency, so the score carries no content
+correspondence and its argmax is noise. Closing the 0.703 deg gap needs
+sub-bin interpolation of the log-polar peak itself, or a spatial score computed
+against the *decimated* template rather than the raw reference. See
+docs/failure_analysis.md.
+
 Public API is frozen:
     estimate_pose(reference, search, nominal_scale)
 
@@ -189,109 +208,6 @@ def _log_polar(magnitude: np.ndarray) -> np.ndarray:
     return np.asarray(
         result,
         dtype=np.float32,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Correlation helpers
-# ---------------------------------------------------------------------------
-
-
-def _ncc(a: np.ndarray, b: np.ndarray) -> float:
-    """Zero-mean normalized cross-correlation."""
-    if a.shape != b.shape:
-        return -1.0
-
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
-
-    a = a - float(a.mean())
-    b = b - float(b.mean())
-
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
-
-    if denom < 1e-8:
-        return -1.0
-
-    value = float(np.sum(a * b) / denom)
-
-    if not np.isfinite(value):
-        return -1.0
-
-    return float(np.clip(value, -1.0, 1.0))
-
-
-def _rotate_scale(
-    image: np.ndarray,
-    angle_deg: float,
-    scale: float,
-) -> np.ndarray:
-    """
-    Transform an image around its centre.
-
-    The returned image has the same dimensions.
-    """
-    h, w = image.shape
-
-    cy = (h - 1) / 2.0
-    cx = (w - 1) / 2.0
-
-    theta = np.deg2rad(angle_deg)
-
-    c = np.cos(theta)
-    s = np.sin(theta)
-
-    matrix = np.array(
-        [
-            [c, s],
-            [-s, c],
-        ],
-        dtype=np.float64,
-    )
-
-    matrix /= max(float(scale), 1e-8)
-
-    centre = np.array(
-        [cy, cx],
-        dtype=np.float64,
-    )
-
-    offset = centre - matrix @ centre
-
-    transformed = ndimage.affine_transform(
-        image,
-        matrix=matrix,
-        offset=offset,
-        output_shape=image.shape,
-        order=1,
-        mode="reflect",
-    )
-
-    return np.asarray(
-        transformed,
-        dtype=np.float32,
-    )
-
-
-def _pose_score(
-    reference: np.ndarray,
-    search: np.ndarray,
-    angle_deg: float,
-) -> float:
-    """
-    Compare reference with search after undoing rotation.
-
-    Residual scale is deliberately fixed at 1.0.
-    """
-    corrected = _rotate_scale(
-        search,
-        -float(angle_deg),
-        1.0,
-    )
-
-    return _ncc(
-        reference,
-        corrected,
     )
 
 
@@ -475,109 +391,6 @@ def _estimate_fourier_mellin(
 
 
 # ---------------------------------------------------------------------------
-# Bounded fallback
-# ---------------------------------------------------------------------------
-
-
-def _fallback(
-    reference: np.ndarray,
-    search: np.ndarray,
-) -> tuple[float, float, float]:
-    """
-    Safe fallback rotation search.
-
-    Residual scale is fixed at 1.0.
-
-    Search range:
-        -20° ... +20°
-
-    Coarse:
-        1° steps
-
-    Fine:
-        ±1° around best result at 0.25° steps
-    """
-    side = max(
-        min(
-            reference.shape[0],
-            reference.shape[1],
-            search.shape[0],
-            search.shape[1],
-        ),
-        64,
-    )
-
-    side = min(
-        int(side),
-        256,
-    )
-
-    if side % 2:
-        side += 1
-
-    ref = _prepare(
-        reference,
-        side,
-    )
-
-    sea = _prepare(
-        search,
-        side,
-    )
-
-    angles = np.arange(
-        -20.0,
-        20.01,
-        1.0,
-    )
-
-    best_score = -1.0
-    best_angle = 0.0
-
-    for angle in angles:
-        score = _pose_score(
-            ref,
-            sea,
-            float(angle),
-        )
-
-        if score > best_score:
-            best_score = score
-            best_angle = float(angle)
-
-    fine_angles = np.arange(
-        best_angle - 1.0,
-        best_angle + 1.001,
-        0.25,
-    )
-
-    for angle in fine_angles:
-        score = _pose_score(
-            ref,
-            sea,
-            float(angle),
-        )
-
-        if score > best_score:
-            best_score = score
-            best_angle = float(angle)
-
-    quality = float(
-        np.clip(
-            (best_score + 1.0) * 0.5,
-            0.0,
-            1.0,
-        )
-    )
-
-    return (
-        float(_normalize_angle(best_angle)),
-        1.0,
-        quality,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -673,45 +486,30 @@ def estimate_pose(
         )
 
     except Exception:
+        # Nominal pose at zero quality, which localize reads as "no estimate"
+        # and replaces with nominal anyway. Deliberately not a spatial rotation
+        # search: the previous revision fell back to sweeping angles and scoring
+        # them by NCC between reference and search resized to a common square.
+        # Those two images are a 1 um field and a 10 um field, so their lattices
+        # sit at frequencies a decade apart and the correlation carries no
+        # content correspondence -- the argmax is noise. It capped quality at
+        # 0.25, above localize's _MIN_POSE_QUALITY of 0.20, so that noise was
+        # accepted and rotated the template by a meaningless angle. It never
+        # fired on any tracked run (all 1716 recorded estimates sit on the
+        # Fourier-Mellin bin grid), so removing it moves no measured number; it
+        # was a live hazard only on inputs that make the spectral path raise.
+        logger.debug("pose estimation failed; using nominal pose", exc_info=True)
+
         try:
             safe_nominal_scale = float(nominal_scale)
+        except (TypeError, ValueError):
+            safe_nominal_scale = float(config.NOMINAL_SCALE)
 
-            if not np.isfinite(safe_nominal_scale) or safe_nominal_scale <= 0.0:
-                safe_nominal_scale = float(config.NOMINAL_SCALE)
+        if not np.isfinite(safe_nominal_scale) or safe_nominal_scale <= 0.0:
+            safe_nominal_scale = float(config.NOMINAL_SCALE)
 
-            reference = np.asarray(
-                reference,
-                dtype=np.float32,
-            )
-
-            search = np.asarray(
-                search,
-                dtype=np.float32,
-            )
-
-            (
-                fallback_angle,
-                _,
-                fallback_quality,
-            ) = _fallback(
-                reference,
-                search,
-            )
-
-            return PoseEstimate(
-                theta_deg=float(fallback_angle),
-                scale=float(safe_nominal_scale),
-                quality=float(
-                    min(
-                        fallback_quality,
-                        0.25,
-                    )
-                ),
-            )
-
-        except Exception:
-            return PoseEstimate(
-                theta_deg=0.0,
-                scale=float(config.NOMINAL_SCALE),
-                quality=0.0,
-            )
+        return PoseEstimate(
+            theta_deg=0.0,
+            scale=safe_nominal_scale,
+            quality=0.0,
+        )

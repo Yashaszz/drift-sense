@@ -87,10 +87,18 @@ correlation evidence does not identify a location — the generator asserts that
 such a layout carries an empty anchor list, which puts the ceiling on this
 dataset at 0.500 and the system at 0.938 of what is achievable. The true peak
 is absent from the top 30 candidates in **160 of the 162** unanchored cases, so
-this is not a near miss. Every one of them escalates, returns the centre-prior
-answer and carries the low-confidence flag; **none returns a confident wrong
-answer**. That is an information-theoretic limit, and the correct response is
-to answer and flag rather than to claim success.
+this is not a near miss. Every one of them escalates to the ambiguous tier,
+returns the highest-scoring lattice cell, and carries the low-confidence flag —
+**all 162 are flagged**. That is an information-theoretic limit, and the correct
+response is to answer and flag rather than to claim success.
+
+Be precise about *which* answer comes back. It is the top correlation peak, not
+the centre of the search image: the mandated centre tie-break only fires among
+candidates that tie, `TIE_SIGMA` is 0.0 so ties are exact-only, and `n_tied` is
+1 in all 324 rows. On this dataset the returned peak sits a median 386 px from
+the image centre. The centre-prior answer is what `localize` degrades to when a
+stage *fails*, and no unanchored case fails — `failure_mode` is `none`
+throughout. Both behaviours are correct; they are different behaviours.
 
 `docs/failure_analysis.md` has the per-stratum breakdown, the stage ablation and
 the reproduction commands; `docs/citations.md` records which parts of the
